@@ -1,4 +1,5 @@
 import os
+import io
 import re
 import unicodedata
 from datetime import datetime
@@ -225,6 +226,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         await update.message.reply_text(resposta)
+        if not extrair_itens(texto) and update.effective_chat.type == "private":
+            # A leitura vai apenas para a conversa que enviou a nota.
+            # Não gravar texto de notas em logs públicos ou no repositório.
+            diagnostico = io.BytesIO(texto.encode("utf-8"))
+            diagnostico.name = "leitura_da_nota.txt"
+            await update.message.reply_document(
+                document=diagnostico,
+                caption="Leitura bruta para diagnóstico dos produtos. "
+                        "Se estiver recebendo suporte, envie este arquivo ao suporte. "
+                        "Ele pode conter dados da sua nota."
+            )
         
         # Aqui você pode adicionar código para salvar no Google Sheets
         # Vou deixar isso para a próxima iteração
