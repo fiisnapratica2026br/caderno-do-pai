@@ -128,6 +128,17 @@ def draft_text(data):
     )
 
 
+def duplicate_text(rows):
+    lines = [
+        f"#{r['id']} · {r['description'][:80]} · {money(r['amount'])} · {purchase_date(r['expense_date'])}"
+        for r in rows
+    ]
+    return ("⚠️ Possível gasto duplicado\n\n"
+            "Já existe nesta casa um gasto com o mesmo valor e a mesma data:\n"
+            + "\n".join(lines)
+            + "\n\nSe for o mesmo gasto, cancele. Se for outra compra, confirme abaixo.")
+
+
 async def propose(update, context, data, source_key, details=None):
     if not await private(update):
         return
@@ -138,7 +149,11 @@ async def propose(update, context, data, source_key, details=None):
     draft_id = str(uuid.uuid4())
     await api(update.effective_user.id, "draft",
         {"id": draft_id, "source_key": source_key, "data": data})
-    await update.effective_message.reply_text(draft_text(data), reply_markup=buttons(draft_id))
+    check = await api(update.effective_user.id, "check_duplicate", {"id": draft_id})
+    preview = draft_text(data)
+    if check.get("duplicates"):
+        preview += "\n\n" + duplicate_text(check["duplicates"])
+    await update.effective_message.reply_text(preview, reply_markup=buttons(draft_id))
     if details:
         # Respeita o limite de caracteres das mensagens do Telegram.
         for offset in range(0, len(details), 3500):
@@ -326,8 +341,29 @@ async def callback(update, context):
     if action == "keep":
         await q.edit_message_text("Exclusão cancelada.")
         return
-    if action in ("save", "cancel"):
-        result = await api(user, "confirm" if action == "save" else "cancel", {"id": identifier})
+    if action == "back":
+        draft = await api(user, "get_draft", {"id": identifier})
+        context.user_data.pop("editing", None)
+        if draft.get("saved_expense_id") or draft.get("cancelled"):
+            await q.message.reply_text("Esse registro já foi concluído.")
+        else:
+            await q.edit_message_text(draft_text(draft["data"]), reply_markup=buttons(identifier))
+        return
+    if action in ("save", "cancel", "force"):
+        payload = {"id": identifier}
+        if action == "force":
+            identifier, token = identifier.rsplit(":", 1)
+            payload = {"id": identifier, "duplicate_token": token}
+        result = await api(user, "cancel" if action == "cancel" else "confirm", payload)
+        if result.get("duplicates"):
+            await q.edit_message_text(duplicate_text(result["duplicates"]),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Cancelar este lançamento", callback_data="cancel:"+identifier)],
+                    [InlineKeyboardButton("É outra compra, salvar", callback_data=f"force:{identifier}:{result['duplicate_token']}")],
+                    [InlineKeyboardButton("Voltar e corrigir", callback_data="back:"+identifier)],
+                ]))
+            context.user_data.pop("editing", None)
+            return
         context.user_data.pop("editing", None)
         await q.edit_message_text(
             f"✅ Gasto salvo para a casa. Registro #{result['saved']}.\nUse o menu para consultar os gastos."
