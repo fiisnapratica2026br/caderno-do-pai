@@ -10,6 +10,7 @@ import logging
 import family
 import requests
 from telegram import Update
+from telegram.error import TimedOut
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -289,18 +290,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+async def baixar_foto(bot, file_id):
+    """Repetir apenas leituras, sem repetir gravações nem mensagens."""
+    for attempt in range(2):
+        try:
+            file = await bot.get_file(file_id, read_timeout=60, connect_timeout=20, pool_timeout=20)
+            return bytes(await file.download_as_bytearray(
+                read_timeout=60, connect_timeout=20, pool_timeout=20))
+        except TimedOut:
+            if attempt == 1:
+                raise
+            await asyncio.sleep(1)
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await family.private(update):
         return
-    await update.message.reply_text("📸 Processando sua nota...")
-    
+    stage = "aviso inicial"
     try:
+        await update.message.reply_text("📸 Processando sua nota...")
+        stage = "download da foto"
         # Pega a foto
         photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        
-        # Envia para OCR
-        image_bytes = bytes(await file.download_as_bytearray())
+        image_bytes = await baixar_foto(context.bot, photo.file_id)
+        stage = "OCR"
         texto, erro = await asyncio.to_thread(ler_imagem, image_bytes)
         
         if erro:
@@ -308,6 +321,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Extrai dados
+        stage = "extração dos dados"
         dados = extrair_dados(texto)
         
         is_bill = dados.get("document_type") == "bill"
@@ -317,6 +331,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expense_date = datetime.strptime(dados["data"], "%d/%m/%Y").date().isoformat() if dados["data"] else None
         items = [{key: str(value) if isinstance(value, Decimal) else value
                   for key, value in item.items()} for item in ([] if is_bill else extrair_itens(texto))]
+        stage = "rascunho e confirmação"
         await family.propose(update, context, {
             "description": (dados["local"] or "Compra sem descrição")[:250],
             "amount": amount, "date": expense_date, "category": dados.get("category", "Outros"), "items": items,
@@ -324,6 +339,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "date_label": dados.get("date_label", "Data da compra"), "due_date": dados.get("due_date", "")
         }, f"photo:{update.effective_chat.id}:{update.message.message_id}", detalhes)
 
+        stage = "envio do diagnóstico"
         if (not amount or not expense_date or (not is_bill and not items)) and update.effective_chat.type == "private":
             # A leitura vai apenas para a conversa que enviou a nota.
             # Não gravar texto de notas em logs públicos ou no repositório.
@@ -338,11 +354,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         
     except Exception as e:
-        logging.error("Falha ao processar nota: %s", type(e).__name__)
-        await update.message.reply_text("❌ Não consegui processar esta nota. Tente novamente em instantes.")
+        logging.error("Falha ao processar nota na etapa %s: %s", stage, type(e).__name__)
+        text = ("⏳ A comunicação com o Telegram demorou demais. "
+                "Nenhum gasto é salvo automaticamente. Tente enviar a foto novamente."
+                if isinstance(e, TimedOut) else
+                "❌ Não consegui processar esta nota. Tente novamente em instantes.")
+        try:
+            await update.message.reply_text(text)
+        except TimedOut:
+            logging.error("Tempo limite ao enviar aviso de falha")
 
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = (Application.builder().token(TELEGRAM_TOKEN)
+           .connect_timeout(20).read_timeout(60).write_timeout(60).pool_timeout(20)
+           .build())
     
     family.register(app)
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
