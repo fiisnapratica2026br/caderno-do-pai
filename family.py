@@ -10,6 +10,7 @@ from datetime import datetime, date
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 import requests
+from categorization import suggest_category
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
@@ -47,7 +48,7 @@ async def show_expense(message, user, identifier):
 CATEGORIES = [
     "Água", "Energia", "Supermercado", "Combustível", "Moradia",
     "Internet e telefone", "Saúde", "Educação", "Transporte",
-    "Casa e manutenção", "Impostos e taxas", "Lazer", "Vestuário", "Pets", "Outros",
+    "Casa e manutenção", "Impostos e taxas", "Lazer", "Vestuário", "Pets", "Outros", "Alimentação fora de casa",
 ]
 
 
@@ -117,7 +118,10 @@ def draft_text(data):
         f"🏪 {data.get('description') or 'Descrição não identificada'}\n"
         f"💰 {money(data['amount']) if data.get('amount') else 'Corrija o valor'}\n"
         f"📅 Data da compra: {purchase_date(data.get('date'))}\n"
-        f"📂 {data.get('category', 'Outros')}\n\n"
+        f"📂 {data.get('category', 'Outros')}"
+        + (" (sugerida — confira)" if data.get("category_auto") and data.get("category") != "Outros" else "")
+        + "\n\n"
+        +
         "Os preços dos produtos podem conter erros de leitura. "
         "Este registro salva o total da compra para a casa."
     )
@@ -126,6 +130,10 @@ def draft_text(data):
 async def propose(update, context, data, source_key, details=None):
     if not await private(update):
         return
+    data = dict(data)
+    if data.get("category", "Outros") == "Outros":
+        data["category"] = suggest_category(data.get("description", ""), data.get("items"), data.get("amount"))
+        data["category_auto"] = True
     draft_id = str(uuid.uuid4())
     await api(update.effective_user.id, "draft",
         {"id": draft_id, "source_key": source_key, "data": data})
@@ -208,8 +216,15 @@ async def handle_text(update, context):
                 await update.message.reply_text("✅ Alteração salva.\n\n" + expense_text(result),
                     reply_markup=expense_buttons(identifier))
             return
+        patch = {field: parsed}
+        if field == "description":
+            draft = await api(update.effective_user.id, "get_draft", {"id": draft_id})
+            data = draft.get("data", {})
+            if data.get("category_auto", data.get("category", "Outros") == "Outros"):
+                patch["category"] = suggest_category(parsed, data.get("items"), data.get("amount"))
+                patch["category_auto"] = True
         result = await api(update.effective_user.id, "edit",
-            {"id": draft_id, "patch": {field: parsed}})
+            {"id": draft_id, "patch": patch})
         context.user_data.pop("editing", None)
         if "saved" in result:
             await update.message.reply_text("Esse gasto já foi salvo; crie um novo registro para outra compra.")
@@ -290,7 +305,7 @@ async def callback(update, context):
         if not index.isdigit() or not 0 <= int(index) < len(CATEGORIES):
             return
         result = await api(user, "edit", {"id": draft_id,
-            "patch": {"category": CATEGORIES[int(index)]}})
+            "patch": {"category": CATEGORIES[int(index)], "category_auto": False}})
         context.user_data.pop("editing", None)
         if "saved" in result:
             await q.message.reply_text("Esse gasto já foi salvo.")
