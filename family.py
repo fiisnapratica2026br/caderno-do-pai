@@ -134,7 +134,7 @@ def duplicate_text(rows):
         for r in rows
     ]
     return ("⚠️ Possível gasto duplicado\n\n"
-            "Já existe nesta casa um gasto com o mesmo valor e a mesma data:\n"
+            "Encontrei um gasto que pode corresponder à mesma nota ou compra:\n"
             + "\n".join(lines)
             + "\n\nSe for o mesmo gasto, cancele. Se for outra compra, confirme abaixo.")
 
