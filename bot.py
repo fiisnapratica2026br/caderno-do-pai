@@ -27,6 +27,9 @@ def ler_imagem(image_bytes):
     payload = {
         'language': 'por',
         'isOverlayRequired': False,
+        'isTable': True,
+        'scale': True,
+        'detectOrientation': True,
         'OCREngine': 2
     }
     headers = {'apikey': OCR_API_KEY}
@@ -124,6 +127,18 @@ def extrair_itens(texto):
     itens = []
     for i, linha in enumerate(linhas):
         encontrado = padrao.search(linha)
+        if not encontrado:
+            # Une apenas fragmentos numéricos/unidades contíguos; nunca
+            # atravessa a descrição de outro produto nem o total da nota.
+            fragmentos = []
+            for fragmento in linhas[i:i + 5]:
+                if not re.fullmatch(r'[\d\s.,R$×xX]+|(?:UN|UND|UNID|PC|PÇ|KG|G|LT|L|MT|M|CX|PCT)\s*[xX×]?', fragmento, re.I):
+                    break
+                fragmentos.append(fragmento)
+                encontrado = padrao.search(" ".join(fragmentos))
+                if encontrado:
+                    linha = " ".join(fragmentos)
+                    break
         if not encontrado:
             continue
         descricao = linha[:encontrado.start()].strip()
