@@ -61,9 +61,9 @@ def extrair_conta(texto):
     normal = norm(texto)
     providers = [('sabesp', 'Sabesp', 'Água'), ('sanepar', 'Sanepar', 'Água'),
                  ('copasa', 'Copasa', 'Água'), ('casan', 'Casan', 'Água'),
-                 ('cedae', 'Cedae', 'Água'), ('celesc', 'Celesc', 'Energia'),
-                 ('cemig', 'Cemig', 'Energia'), ('copel', 'Copel', 'Energia'),
-                 ('enel', 'Enel', 'Energia'), ('energisa', 'Energisa', 'Energia')]
+                 ('cedae', 'Cedae', 'Água'), ('cpfl', 'CPFL', 'Energia elétrica'), ('celesc', 'Celesc', 'Energia elétrica'),
+                 ('cemig', 'Cemig', 'Energia elétrica'), ('copel', 'Copel', 'Energia elétrica'),
+                 ('enel', 'Enel', 'Energia elétrica'), ('energisa', 'Energisa', 'Energia elétrica')]
     provider = next(((name, cat) for term, name, cat in providers
                      if re.search(r'\b' + term + r'\b', normal)), None)
     if not provider and re.search(r'agua\s+e\s+[ef]sgoto', normal):
