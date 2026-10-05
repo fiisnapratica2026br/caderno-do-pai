@@ -335,6 +335,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await family.propose(update, context, {
             "description": (dados["local"] or "Compra sem descrição")[:250],
             "amount": amount, "date": expense_date, "category": dados.get("category", "Outros"), "items": items,
+            "photo_hash": hashlib.sha256(image_bytes).hexdigest(),
+            "photo_unique_id": photo.file_unique_id,
             "document_type": dados.get("document_type", "receipt"),
             "date_label": dados.get("date_label", "Data da compra"), "due_date": dados.get("due_date", "")
         }, f"photo:{update.effective_chat.id}:{update.message.message_id}", detalhes)
