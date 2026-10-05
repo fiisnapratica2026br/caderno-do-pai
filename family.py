@@ -117,13 +117,14 @@ def draft_text(data):
         "🧾 Confira antes de salvar\n\n"
         f"🏪 {data.get('description') or 'Descrição não identificada'}\n"
         f"💰 {money(data['amount']) if data.get('amount') else 'Corrija o valor'}\n"
-        f"📅 Data da compra: {purchase_date(data.get('date'))}\n"
+        f"📅 {data.get('date_label', 'Data da compra')}: {purchase_date(data.get('date'))}\n"
         f"📂 {data.get('category', 'Outros')}"
         + (" (sugerida — confira)" if data.get("category_auto") and data.get("category") != "Outros" else "")
+        + ("\n📆 Vencimento: " + data["due_date"] if data.get("due_date") else "")
         + "\n\n"
-        +
-        "Os preços dos produtos podem conter erros de leitura. "
-        "Este registro salva o total da compra para a casa."
+        + ("Confira o total da fatura e a data do documento. Vencimento não significa pagamento."
+           if data.get("document_type") == "bill" else
+           "Os preços dos produtos podem conter erros de leitura. Este registro salva o total da compra para a casa.")
     )
 
 
