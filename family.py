@@ -15,6 +15,28 @@ from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, f
 
 TZ = ZoneInfo("America/Sao_Paulo")
 
+CATEGORIES = [
+    "Água", "Energia", "Supermercado", "Combustível", "Moradia",
+    "Internet e telefone", "Saúde", "Educação", "Transporte",
+    "Casa e manutenção", "Impostos e taxas", "Lazer", "Vestuário", "Pets", "Outros",
+]
+
+
+def purchase_date(value):
+    return date.fromisoformat(value).strftime("%d/%m/%Y") if value else "Corrija a data"
+
+
+def registration_date(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def category_buttons(draft_id):
+    choices = [InlineKeyboardButton(name, callback_data=f"catpick:{draft_id}:{i}")
+               for i, name in enumerate(CATEGORIES)]
+    return InlineKeyboardMarkup([choices[i:i+2] for i in range(0, len(choices), 2)])
+
+
+
 
 def api_sync(user, action, data):
     response = requests.post(os.environ["HOUSEHOLD_API_URL"],
@@ -47,7 +69,7 @@ def buttons(draft_id):
         [InlineKeyboardButton("✅ Salvar gasto", callback_data="save:"+draft_id),
          InlineKeyboardButton("Cancelar", callback_data="cancel:"+draft_id)],
         [InlineKeyboardButton("Corrigir valor", callback_data="amount:"+draft_id),
-         InlineKeyboardButton("Corrigir data", callback_data="date:"+draft_id)],
+         InlineKeyboardButton("Data da compra", callback_data="date:"+draft_id)],
         [InlineKeyboardButton("Editar descrição", callback_data="description:"+draft_id),
          InlineKeyboardButton("Categoria", callback_data="category:"+draft_id)],
     ])
@@ -65,7 +87,7 @@ def draft_text(data):
         "🧾 Confira antes de salvar\n\n"
         f"🏪 {data.get('description') or 'Descrição não identificada'}\n"
         f"💰 {money(data['amount']) if data.get('amount') else 'Corrija o valor'}\n"
-        f"📅 {data.get('date') or 'Corrija a data'}\n"
+        f"📅 Data da compra: {purchase_date(data.get('date'))}\n"
         f"📂 {data.get('category', 'Outros')}\n\n"
         "Os preços dos produtos podem conter erros de leitura. "
         "Este registro salva o total da compra para a casa."
@@ -164,6 +186,18 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action == "catpick":
+        draft_id, index = identifier.rsplit(":", 1)
+        if not index.isdigit() or not 0 <= int(index) < len(CATEGORIES):
+            return
+        result = await api(user, "edit", {"id": draft_id,
+            "patch": {"category": CATEGORIES[int(index)]}})
+        context.user_data.pop("editing", None)
+        if "saved" in result:
+            await q.message.reply_text("Esse gasto já foi salvo.")
+        else:
+            await q.edit_message_text(draft_text(result), reply_markup=buttons(draft_id))
+        return
     if action == "delete":
         result = await api(user, "delete", {"expense_id": int(identifier)})
         await q.edit_message_text("Gasto excluído." if result.get("deleted") else "Gasto não encontrado nesta casa.")
@@ -184,9 +218,13 @@ async def callback(update, context):
     if draft.get("saved_expense_id") or draft.get("cancelled"):
         await q.message.reply_text("Esse registro já foi concluído.")
         return
+    if action == "category":
+        context.user_data.pop("editing", None)
+        await q.message.reply_text("Escolha a categoria deste gasto:", reply_markup=category_buttons(identifier))
+        return
     context.user_data["editing"] = (action, identifier)
     prompts = {"amount": "Digite o valor correto. Exemplo: 149,95",
-        "date": "Digite a data. Exemplo: 03/10/2026",
+        "date": "Digite a data real da compra com ano. Exemplo: 03/05/2026. A data do lançamento será automática.",
         "description": "Digite o nome da loja ou a descrição do gasto.",
         "category": "Digite a categoria: Mercado, Casa, Transporte, Saúde, Educação, Lazer ou Outros."}
     await q.message.reply_text(prompts[action])
@@ -212,19 +250,23 @@ async def report(update, context):
     if command == "/planilha":
         out = io.StringIO()
         writer = csv.writer(out, delimiter=";")
-        writer.writerow(["Registro", "Data", "Descrição", "Categoria", "Valor (R$)"])
+        writer.writerow(["Registro", "Data da compra", "Lançado em (Brasília)", "Descrição", "Categoria", "Valor (R$)"])
         def safe_cell(value):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
         for row in rows:
-            writer.writerow([row["id"], row["expense_date"], safe_cell(row["description"]),
+            writer.writerow([row["id"], purchase_date(row["expense_date"]), registration_date(row["created_at"]), safe_cell(row["description"]),
                 safe_cell(row["category"]), format(Decimal(str(row["amount"])), ".2f").replace(".", ",")])
         file = io.BytesIO(out.getvalue().encode("utf-8-sig"))
         file.name = f"gastos-da-casa-{start:%Y-%m}.csv"
         await update.message.reply_document(file, caption="Planilha do mês. Abre no Excel ou Google Planilhas.")
     elif command == "/historico":
-        lines = [f"#{r['id']} · {r['expense_date']} · {r['description'][:60]} · {money(r['amount'])}" for r in rows[:20]]
-        await update.message.reply_text("🏠 Gastos do mês\n\n" + ("\n".join(lines) or "Nenhum gasto registrado."))
+        lines = [f"#{r['id']} · {r['description'][:60]} · {money(r['amount'])}\n"
+                 f"Compra: {purchase_date(r['expense_date'])} · Lançado: {registration_date(r['created_at'])}\n"
+                 f"Categoria: {r['category']}" for r in rows[:20]]
+        text = "🏠 Gastos do mês\n\n" + ("\n\n".join(lines) or "Nenhum gasto registrado.")
+        for offset in range(0, len(text), 3500):
+            await update.message.reply_text(text[offset:offset+3500])
     else:
         categories = defaultdict(Decimal)
         total = Decimal("0")
@@ -232,7 +274,7 @@ async def report(update, context):
             total += Decimal(str(row["amount"]))
             categories[row["category"]] += Decimal(str(row["amount"]))
         lines = [f"• {cat}: {money(amount)}" for cat, amount in sorted(categories.items(), key=lambda x: -x[1])]
-        text = f"🏠 Resumo da casa · {start:%m/%Y}\n\nTotal registrado: {money(total)}\nCompras: {len(rows)}\n\n" + "\n".join(lines)
+        text = f"🏠 Resumo da casa · {start:%m/%Y}\nPor data da compra\n\nTotal registrado: {money(total)}\nCompras: {len(rows)}\n\n" + "\n".join(lines)
         for offset in range(0, len(text), 3500):
             await update.message.reply_text(text[offset:offset+3500])
     if len(rows) == 2000:
