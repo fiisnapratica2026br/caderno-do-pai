@@ -18,7 +18,8 @@ TZ = ZoneInfo("America/Sao_Paulo")
 MENU = ReplyKeyboardMarkup([
     ["➕ Adicionar gasto", "📸 Enviar nota"],
     ["📊 Resumo do mês", "📋 Histórico"],
-    ["📥 Exportar planilha", "🏠 Minha casa"],
+    ["📥 Exportar planilha", "📄 Relatório PDF"],
+    ["🏠 Minha casa"],
 ], resize_keyboard=True)
 
 def expense_text(row):
@@ -173,7 +174,9 @@ async def home(update, context):
         "/casa Família do Anderson — nome da casa\n"
         "/resumo — total e categorias do mês\n"
         "/historico — últimos gastos do mês\n"
-        "/planilha — baixar os registros do mês\n"
+        "/planilha — baixar Excel com resumo e gastos\n"
+        "/relatorio — relatório do mês em PDF\n"
+        "/csv — exportação simples\n"
         "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"
@@ -187,7 +190,7 @@ async def handle_text(update, context):
     if not await private(update):
         return
     value = update.message.text.strip()
-    if value in ("📊 Resumo do mês", "📋 Histórico", "📥 Exportar planilha"):
+    if value in ("📊 Resumo do mês", "📋 Histórico", "📥 Exportar planilha", "📄 Relatório PDF"):
         context.user_data.pop("editing", None)
         context.args = []
         await report(update, context)
@@ -406,9 +409,19 @@ async def report(update, context):
         return
     rows = await api(update.effective_user.id, "list", {"from": start.isoformat(), "until": end.isoformat()})
     command = {"📊 Resumo do mês": "/resumo", "📋 Histórico": "/historico",
-               "📥 Exportar planilha": "/planilha"}.get(update.message.text,
+               "📥 Exportar planilha": "/planilha", "📄 Relatório PDF": "/relatorio"}.get(update.message.text,
                    update.message.text.split()[0].split("@")[0])
-    if command == "/planilha":
+    if command in ("/planilha", "/relatorio"):
+        if not rows:
+            await update.message.reply_text("Nenhum gasto registrado neste mês.", reply_markup=MENU)
+            return
+        from reports import excel, pdf
+        household = await api(update.effective_user.id, "home")
+        builder = excel if command == "/planilha" else pdf
+        file = await asyncio.to_thread(builder, rows, household["name"], start)
+        await update.message.reply_document(file,
+            caption=f"Gastos de {start:%m/%Y}. Por data da compra. Categorias conforme os registros salvos.")
+    elif command == "/csv":
         out = io.StringIO()
         writer = csv.writer(out, delimiter=";")
         writer.writerow(["Registro", "Data da compra", "Lançado em (Brasília)", "Descrição", "Categoria", "Valor (R$)"])
@@ -486,7 +499,7 @@ async def error_handler(update, context):
 def register(app):
     app.add_handler(CommandHandler(["start", "casa", "menu"], home))
     app.add_handler(CommandHandler("editar", edit_expense))
-    app.add_handler(CommandHandler(["resumo", "historico", "planilha"], report))
+    app.add_handler(CommandHandler(["resumo", "historico", "planilha", "relatorio", "csv"], report))
     app.add_handler(CommandHandler("excluir", delete))
     app.add_handler(CommandHandler("cancelar", cancel_edit))
     app.add_handler(CallbackQueryHandler(callback))
