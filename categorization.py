@@ -14,7 +14,7 @@ def normalize(value):
 RULES = {
     "Água": (r"conta de agua|fatura de agua|agua e esgoto|saneamento|sabesp|sanepar|copasa|casan|cedae",),
     "Energia elétrica": (r"conta de luz|conta de energia|energia eletrica|fatura de energia|cpfl|forca|celesc|cemig|copel|enel|energisa|equatorial",),
-    "Supermercado": (r"supermercado|supermercados|hipermercado|atacadao|assai|atacarejo|mercearia|hortifruti|acougue|mercado|feira",
+    "Supermercado": (r"supermercado|supermercados|hipermercado|atacadao|assai|atacarejo|mercearia|hortifruti|sacolao|acougue|mercado|feira",
                       r"arroz|feijao|leite|macarrao|farinha|acucar|cafe em po|oleo de soja|ovos|banana|tomate|agua mineral|detergente|sabao|papel higienico"),
     "Compras na internet": (r"shopee|amazon|mercado livre|mercadolivre|tiktok|tik tok|aliexpress|shein|compra online|compras online",),
     "Moradia": (r"aluguel|condominio|financiamento imobiliario|prestacao da casa|prestacao do apartamento",),
@@ -27,7 +27,7 @@ RULES = {
     "Lazer": (r"cinema|teatro|show|ingresso|passeio|parque de diversoes|videogame|brinquedo|brinquedos|streaming|netflix|spotify|viagem|hotel|pousada|lazer",),
     "Vestuário": (r"roupa|roupas|camiseta|camisa|calca|vestido|sapato|sapatos|tenis|calcado|calcados|bermuda|blusa|jaqueta|meias",),
     "Pets": (r"pet shop|petshop|veterinario|veterinaria|racao|areia para gatos|banho e tosa",),
-    "Alimentação fora de casa": (r"cachorro quente|hot dog|hamburguer|hamburger|lanche|lanchonete|restaurante|restaurantes|pizzaria|pizza|delivery|ifood|pastel|sorvete|sorveteria|padaria|cafe da manha fora",),
+    "Alimentação fora de casa": (r"cachorro quente|hot dog|hamburguer|hamburger|lanche|lanches|lanchonete|restaurante|restaurantes|pizzaria|pizza|delivery|ifood|pastel|sorvete|sorveteria|padaria|cafe da manha fora",),
 }
 
 def matches(text, expression):
@@ -51,7 +51,7 @@ def classify_text(value, merchant=False):
         if matches(text, r"restaurante|lanchonete|pizzaria|padaria|sorveteria"):
             return "Alimentação fora de casa"
     short_labels = {"agua": "Água", "luz": "Energia elétrica", "forca": "Energia elétrica",
-                    "energia": "Energia elétrica", "telefone": "Internet e telefone"}
+                    "energia": "Energia elétrica", "telefone": "Internet e telefone", "gas": "Casa e manutenção"}
     if text in short_labels:
         return short_labels[text]
     hits = [cat for cat, expressions in RULES.items()
