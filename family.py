@@ -10,10 +10,39 @@ from datetime import datetime, date
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 TZ = ZoneInfo("America/Sao_Paulo")
+MENU = ReplyKeyboardMarkup([
+    ["➕ Adicionar gasto", "📸 Enviar nota"],
+    ["📊 Resumo do mês", "📋 Histórico"],
+    ["📥 Exportar planilha", "🏠 Minha casa"],
+], resize_keyboard=True)
+
+def expense_text(row):
+    return (f"🧾 Gasto #{row['id']}\n\n"
+            f"🏪 {row['description']}\n💰 {money(row['amount'])}\n"
+            f"📅 Compra: {purchase_date(row['expense_date'])}\n"
+            f"🕒 Lançado: {registration_date(row['created_at'])}\n"
+            f"📂 {row['category']}")
+
+def expense_buttons(identifier):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Valor", callback_data=f"expamount:{identifier}"),
+         InlineKeyboardButton("Data da compra", callback_data=f"expdate:{identifier}")],
+        [InlineKeyboardButton("Descrição", callback_data=f"expdescription:{identifier}"),
+         InlineKeyboardButton("Categoria", callback_data=f"expcategory:{identifier}")],
+        [InlineKeyboardButton("Concluir edição", callback_data=f"expdone:{identifier}")],
+    ])
+
+async def show_expense(message, user, identifier):
+    row = await api(user, "get_expense", {"expense_id": int(identifier)})
+    if row.get("missing"):
+        await message.reply_text("Gasto não encontrado nesta casa.")
+        return
+    await message.reply_text(expense_text(row), reply_markup=expense_buttons(identifier))
+
 
 CATEGORIES = [
     "Água", "Energia", "Supermercado", "Combustível", "Moradia",
@@ -121,10 +150,12 @@ async def home(update, context):
         "/resumo — total e categorias do mês\n"
         "/historico — últimos gastos do mês\n"
         "/planilha — baixar os registros do mês\n"
+        "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"
         "Uma conta do Telegram centraliza os gastos da família nesta versão. "
-        "Não pedimos acesso ao banco. As fotos são enviadas ao serviço de OCR para leitura."
+        "Não pedimos acesso ao banco. As fotos são enviadas ao serviço de OCR para leitura.",
+        reply_markup=MENU
     )
 
 
@@ -132,6 +163,24 @@ async def handle_text(update, context):
     if not await private(update):
         return
     value = update.message.text.strip()
+    if value in ("📊 Resumo do mês", "📋 Histórico", "📥 Exportar planilha"):
+        context.user_data.pop("editing", None)
+        context.args = []
+        await report(update, context)
+        return
+    if value == "🏠 Minha casa":
+        context.user_data.pop("editing", None)
+        context.args = []
+        await home(update, context)
+        return
+    if value in ("➕ Adicionar gasto", "📸 Enviar nota"):
+        context.user_data.pop("editing", None)
+        await update.message.reply_text(
+            "Escreva a descrição e o valor. Exemplo: cachorro quente do Bidjula 15,00. Depois confira a data e a categoria antes de salvar."
+            if value == "➕ Adicionar gasto" else
+            "Envie uma foto nítida da nota inteira, com boa iluminação. Depois confira os dados antes de salvar.",
+            reply_markup=MENU)
+        return
     edit = context.user_data.get("editing")
     if edit:
         field, draft_id = edit
@@ -147,6 +196,17 @@ async def handle_text(update, context):
                 parsed = value
         except ValueError:
             await update.message.reply_text("Formato inválido. Use 149,95 para valor ou 03/10/2026 para data.")
+            return
+        if draft_id.startswith("expense:"):
+            identifier = draft_id.split(":", 1)[1]
+            result = await api(update.effective_user.id, "update_expense",
+                {"expense_id": int(identifier), "patch": {field: parsed}})
+            context.user_data.pop("editing", None)
+            if result.get("missing"):
+                await update.message.reply_text("Gasto não encontrado nesta casa.")
+            else:
+                await update.message.reply_text("✅ Alteração salva.\n\n" + expense_text(result),
+                    reply_markup=expense_buttons(identifier))
             return
         result = await api(update.effective_user.id, "edit",
             {"id": draft_id, "patch": {field: parsed}})
@@ -186,6 +246,45 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action == "expense":
+        context.user_data.pop("editing", None)
+        await show_expense(q.message, user, identifier)
+        return
+    if action == "expdone":
+        context.user_data.pop("editing", None)
+        await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.reply_text("Edição concluída. As alterações foram salvas.", reply_markup=MENU)
+        return
+    if action == "expcat":
+        identifier, index = identifier.rsplit(":", 1)
+        if not index.isdigit() or not 0 <= int(index) < len(CATEGORIES):
+            return
+        result = await api(user, "update_expense", {"expense_id": int(identifier),
+            "patch": {"category": CATEGORIES[int(index)]}})
+        context.user_data.pop("editing", None)
+        await q.edit_message_text("Gasto não encontrado nesta casa." if result.get("missing")
+            else "✅ Categoria salva.\n\n" + expense_text(result),
+            reply_markup=None if result.get("missing") else expense_buttons(identifier))
+        return
+    if action in ("expamount", "expdate", "expdescription", "expcategory"):
+        row = await api(user, "get_expense", {"expense_id": int(identifier)})
+        if row.get("missing"):
+            await q.message.reply_text("Gasto não encontrado nesta casa.")
+            return
+        field = action[3:]
+        if field == "category":
+            context.user_data.pop("editing", None)
+            choices = [InlineKeyboardButton(name, callback_data=f"expcat:{identifier}:{i}")
+                       for i, name in enumerate(CATEGORIES)]
+            await q.message.reply_text("Escolha a categoria. Ela será salva ao tocar:",
+                reply_markup=InlineKeyboardMarkup([choices[i:i+2] for i in range(0, len(choices), 2)]))
+            return
+        context.user_data["editing"] = (field, "expense:" + identifier)
+        prompts = {"amount": "Digite o novo valor. Exemplo: 149,95",
+                   "date": "Digite a data real da compra. Exemplo: 03/05/2026",
+                   "description": "Digite a nova descrição, com até 250 caracteres."}
+        await q.message.reply_text(prompts[field] + "\nA alteração será salva ao enviar. Use /cancelar para desistir.")
+        return
     if action == "catpick":
         draft_id, index = identifier.rsplit(":", 1)
         if not index.isdigit() or not 0 <= int(index) < len(CATEGORIES):
@@ -198,6 +297,12 @@ async def callback(update, context):
         else:
             await q.edit_message_text(draft_text(result), reply_markup=buttons(draft_id))
         return
+    if action == "askdelete":
+        await q.message.reply_text(f"Excluir o gasto #{identifier} desta casa?",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Excluir", callback_data="delete:"+identifier),
+                InlineKeyboardButton("Manter", callback_data="keep:"+identifier)]]))
+        return
     if action == "delete":
         result = await api(user, "delete", {"expense_id": int(identifier)})
         await q.edit_message_text("Gasto excluído." if result.get("deleted") else "Gasto não encontrado nesta casa.")
@@ -209,8 +314,10 @@ async def callback(update, context):
         result = await api(user, "confirm" if action == "save" else "cancel", {"id": identifier})
         context.user_data.pop("editing", None)
         await q.edit_message_text(
-            f"✅ Gasto salvo para a casa. Registro #{result['saved']}.\nUse /resumo ou /planilha."
-            if result.get("saved") else "Registro cancelado.")
+            f"✅ Gasto salvo para a casa. Registro #{result['saved']}.\nUse o menu para consultar os gastos."
+            if result.get("saved") else "Registro cancelado.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Editar gasto",
+                callback_data=f"expense:{result['saved']}")]]) if result.get("saved") else None)
         return
     if action not in ("amount", "date", "description", "category"):
         return
@@ -246,7 +353,9 @@ async def report(update, context):
         await update.message.reply_text("Use mês/ano: /resumo 10/2026")
         return
     rows = await api(update.effective_user.id, "list", {"from": start.isoformat(), "until": end.isoformat()})
-    command = update.message.text.split()[0].split("@")[0]
+    command = {"📊 Resumo do mês": "/resumo", "📋 Histórico": "/historico",
+               "📥 Exportar planilha": "/planilha"}.get(update.message.text,
+                   update.message.text.split()[0].split("@")[0])
     if command == "/planilha":
         out = io.StringIO()
         writer = csv.writer(out, delimiter=";")
@@ -265,8 +374,12 @@ async def report(update, context):
                  f"Compra: {purchase_date(r['expense_date'])} · Lançado: {registration_date(r['created_at'])}\n"
                  f"Categoria: {r['category']}" for r in rows[:20]]
         text = "🏠 Gastos do mês\n\n" + ("\n\n".join(lines) or "Nenhum gasto registrado.")
-        for offset in range(0, len(text), 3500):
-            await update.message.reply_text(text[offset:offset+3500])
+        if not rows:
+            await update.message.reply_text(text)
+        for row, line in zip(rows[:20], lines):
+            await update.message.reply_text(line, reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Editar", callback_data=f"expense:{row['id']}"),
+                InlineKeyboardButton("Excluir", callback_data=f"askdelete:{row['id']}")]]))
     else:
         categories = defaultdict(Decimal)
         total = Decimal("0")
@@ -279,6 +392,16 @@ async def report(update, context):
             await update.message.reply_text(text[offset:offset+3500])
     if len(rows) == 2000:
         await update.message.reply_text("Este relatório atingiu o limite de 2.000 registros; pode estar incompleto.")
+
+
+async def edit_expense(update, context):
+    if not await private(update):
+        return
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text("Toque em Editar no histórico ou use /editar 123.")
+        return
+    context.user_data.pop("editing", None)
+    await show_expense(update.message, update.effective_user.id, context.args[0])
 
 
 async def delete(update, context):
@@ -309,7 +432,8 @@ async def error_handler(update, context):
 
 
 def register(app):
-    app.add_handler(CommandHandler(["start", "casa"], home))
+    app.add_handler(CommandHandler(["start", "casa", "menu"], home))
+    app.add_handler(CommandHandler("editar", edit_expense))
     app.add_handler(CommandHandler(["resumo", "historico", "planilha"], report))
     app.add_handler(CommandHandler("excluir", delete))
     app.add_handler(CommandHandler("cancelar", cancel_edit))
