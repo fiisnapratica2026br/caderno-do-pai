@@ -24,7 +24,7 @@ RULES = {
     "Transporte": (r"combustivel|gasolina|etanol|diesel|abastecimento|abasteci|posto de combustivel|posto de gasolina|gnv|uber|99pop|taxi|onibus|metro|passagem|pedagio|estacionamento|oficina mecanica|mecanico|pneu|pneus|troca de oleo|seguro do carro",),
     "Casa e manutenção": (r"mesa|cadeira|cadeiras|sofa|armario|cama|colchao|geladeira|fogao|lavadora|micro ondas|moveis|mobilia|abracadeira|abracadeiras|material de construcao|ferragem|ferragens|tinta|cimento|torneira|encanador|eletricista|botijao|gas de cozinha|conserto|reforma",),
     "Impostos e taxas": (r"iptu|ipva|licenciamento|imposto|impostos|taxa de licenciamento|darf|das mei",),
-    "Lazer": (r"cinema|teatro|show|ingresso|passeio|parque de diversoes|videogame|brinquedo|brinquedos|streaming|netflix|spotify|viagem|hotel|pousada|lazer",),
+    "Lazer": (r"clube de campo|clube campestre|campestre|cinema|teatro|show|ingresso|passeio|parque de diversoes|videogame|brinquedo|brinquedos|streaming|netflix|spotify|viagem|hotel|pousada|lazer",),
     "Vestuário": (r"roupa|roupas|camiseta|camisa|calca|vestido|sapato|sapatos|tenis|calcado|calcados|bermuda|blusa|jaqueta|meias",),
     "Pets": (r"pet shop|petshop|veterinario|veterinaria|racao|areia para gatos|banho e tosa",),
     "Alimentação fora de casa": (r"cachorro quente|hot dog|hamburguer|hamburger|lanche|lanches|lanchonete|restaurante|restaurantes|pizzaria|pizza|delivery|ifood|pastel|sorvete|sorveteria|padaria|cafe da manha fora",),
