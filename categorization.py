@@ -13,15 +13,15 @@ def normalize(value):
 # energia de um alimento como luz e nomes genéricos de lojas como supermercado.
 RULES = {
     "Água": (r"conta de agua|fatura de agua|agua e esgoto|saneamento|sabesp|sanepar|copasa|casan|cedae",),
-    "Energia": (r"conta de luz|conta de energia|energia eletrica|fatura de energia|celesc|cemig|copel|enel|energisa|equatorial",),
+    "Energia elétrica": (r"conta de luz|conta de energia|energia eletrica|fatura de energia|cpfl|forca|celesc|cemig|copel|enel|energisa|equatorial",),
     "Supermercado": (r"supermercado|supermercados|hipermercado|atacadao|assai|atacarejo|mercearia|hortifruti|acougue|mercado|feira",
                       r"arroz|feijao|leite|macarrao|farinha|acucar|cafe em po|oleo de soja|ovos|banana|tomate|agua mineral|detergente|sabao|papel higienico"),
-    "Combustível": (r"gasolina|etanol|diesel|abastecimento|abasteci|posto de combustivel|posto de gasolina|gnv",),
+    "Compras na internet": (r"shopee|amazon|mercado livre|mercadolivre|tiktok|tik tok|aliexpress|shein|compra online|compras online",),
     "Moradia": (r"aluguel|condominio|financiamento imobiliario|prestacao da casa|prestacao do apartamento",),
-    "Internet e telefone": (r"internet|banda larga|fibra optica|conta de telefone|plano de celular|recarga de celular|telefonia|telecom",),
+    "Internet e telefone": (r"internet|banda larga|fibra optica|conta de telefone|plano de celular|recarga de celular|telefonia|telecom|intercel",),
     "Saúde": (r"farmacia|drogaria|medicamento|remedio|consulta medica|dentista|odontologia|hospital|plano de saude|exame medico|clinica|fisioterapia",),
     "Educação": (r"escola|escolar|mensalidade escolar|faculdade|universidade|curso|material escolar|livro didatico|creche|apostila",),
-    "Transporte": (r"uber|99pop|taxi|onibus|metro|passagem|pedagio|estacionamento|oficina mecanica|mecanico|pneu|pneus|troca de oleo|seguro do carro",),
+    "Transporte": (r"combustivel|gasolina|etanol|diesel|abastecimento|abasteci|posto de combustivel|posto de gasolina|gnv|uber|99pop|taxi|onibus|metro|passagem|pedagio|estacionamento|oficina mecanica|mecanico|pneu|pneus|troca de oleo|seguro do carro",),
     "Casa e manutenção": (r"mesa|cadeira|cadeiras|sofa|armario|cama|colchao|geladeira|fogao|lavadora|micro ondas|moveis|mobilia|abracadeira|abracadeiras|material de construcao|ferragem|ferragens|tinta|cimento|torneira|encanador|eletricista|botijao|gas de cozinha|conserto|reforma",),
     "Impostos e taxas": (r"iptu|ipva|licenciamento|imposto|impostos|taxa de licenciamento|darf|das mei",),
     "Lazer": (r"cinema|teatro|show|ingresso|passeio|parque de diversoes|videogame|brinquedo|brinquedos|streaming|netflix|spotify|viagem|hotel|pousada|lazer",),
@@ -37,6 +37,9 @@ def classify_text(value, merchant=False):
     text = normalize(value)
     if not text:
         return "Outros"
+    # Marketplaces têm precedência: "mercado livre" não é supermercado.
+    if merchant and matches(text, RULES["Compras na internet"][0]):
+        return "Compras na internet"
     # Loja conhecida por tipo de atividade prevalece sobre palavras nos produtos.
     if merchant:
         if matches(text, RULES["Supermercado"][0]):
@@ -47,8 +50,8 @@ def classify_text(value, merchant=False):
             return "Pets"
         if matches(text, r"restaurante|lanchonete|pizzaria|padaria|sorveteria"):
             return "Alimentação fora de casa"
-    short_labels = {"agua": "Água", "luz": "Energia", "forca": "Energia",
-                    "energia": "Energia", "telefone": "Internet e telefone"}
+    short_labels = {"agua": "Água", "luz": "Energia elétrica", "forca": "Energia elétrica",
+                    "energia": "Energia elétrica", "telefone": "Internet e telefone"}
     if text in short_labels:
         return short_labels[text]
     hits = [cat for cat, expressions in RULES.items()
