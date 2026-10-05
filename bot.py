@@ -7,6 +7,7 @@ from decimal import Decimal
 import asyncio
 import hashlib
 import logging
+import family
 import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -194,6 +195,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await family.private(update):
+        return
     await update.message.reply_text("📸 Processando sua nota...")
     
     try:
@@ -214,18 +217,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         detalhes = formatar_itens(texto, dados["valor"])
 
-        # Formata resposta visual
-        resposta = (
-            f"🧾 Nota lida (teste)\n\n"
-            f"🏪 Local: {dados['local'] or 'Não identificado'}\n"
-            f"💰 Valor: {dados['valor'] or 'Não identificado'}\n"
-            f"📅 Data: {dados['data'] or 'Não identificada'}\n\n"
-            f"{detalhes}\n"
-            f"ℹ️ A gravação na planilha ainda não está configurada.\n"
-            f"⚠️ Confira os valores, a leitura automática pode errar."
-        )
-        
-        await update.message.reply_text(resposta)
+        amount = family.parse_amount(dados["valor"]) if dados["valor"] else None
+        expense_date = datetime.strptime(dados["data"], "%d/%m/%Y").date().isoformat() if dados["data"] else None
+        items = [{key: str(value) if isinstance(value, Decimal) else value
+                  for key, value in item.items()} for item in extrair_itens(texto)]
+        await family.propose(update, context, {
+            "description": (dados["local"] or "Compra sem descrição")[:250],
+            "amount": amount, "date": expense_date, "category": "Outros", "items": items
+        }, f"photo:{update.effective_chat.id}:{update.message.message_id}", detalhes)
+
         if not extrair_itens(texto) and update.effective_chat.type == "private":
             # A leitura vai apenas para a conversa que enviou a nota.
             # Não gravar texto de notas em logs públicos ou no repositório.
@@ -238,8 +238,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Ele pode conter dados da sua nota."
             )
         
-        # Aqui você pode adicionar código para salvar no Google Sheets
-        # Vou deixar isso para a próxima iteração
         
     except Exception as e:
         logging.error("Falha ao processar nota: %s", type(e).__name__)
@@ -248,7 +246,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start))
+    family.register(app)
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     logging.basicConfig(level=logging.WARNING)
@@ -264,7 +262,7 @@ def main():
             url_path="telegram",
             webhook_url=public_url.rstrip("/") + "/telegram",
             secret_token=secret,
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
         )
     else:
         print("Bot iniciando localmente.", flush=True)
