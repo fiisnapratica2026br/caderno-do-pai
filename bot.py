@@ -1,4 +1,8 @@
 import os
+import re
+import unicodedata
+from datetime import datetime
+from decimal import Decimal
 import asyncio
 import hashlib
 import logging
@@ -43,27 +47,66 @@ def ler_imagem(image_bytes):
     return texto, None
 
 def extrair_dados(texto):
-    """Extrai informações básicas do texto da nota"""
-    linhas = texto.split('\n')
-    dados = {
-        'local': '',
-        'valor': '',
-        'data': '',
-        'texto_completo': texto
-    }
-    
+    """Procura o total explicitamente; nunca usa quantidade como valor."""
+    linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+    dados = {'local': '', 'valor': '', 'data': '', 'texto_completo': texto}
+    if linhas:
+        dados['local'] = linhas[0]
+    def normalizar(linha):
+        return ''.join(c for c in unicodedata.normalize('NFKD', linha.lower())
+                       if not unicodedata.combining(c))
+    # Duas casas decimais obrigatórias. Rejeita quantidades como 4,000.
+    moeda = re.compile(r'(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+|\d+)[,.]\d{2}(?![\d.,])')
+    candidatos = []
+    for i, linha in enumerate(linhas):
+        rotulo = normalizar(linha)
+        if any(x in rotulo for x in ('subtotal', 'sub total', 'tribut', 'imposto',
+                                     'desconto', 'troco', 'quantidade', 'qtde')):
+            continue
+        prioridade = None
+        if re.search(r'\b(?:valor\s+total|total\s+(?:a\s+pagar|da\s+nota|da\s+compra|geral))\b', rotulo):
+            prioridade = 3
+        elif re.search(r'\btotal\b', rotulo):
+            prioridade = 2
+        elif re.search(r'\bvalor\s+pago\b', rotulo):
+            prioridade = 1
+        if prioridade is None:
+            continue
+        valores = moeda.findall(linha)
+        if not valores:
+            # OCR às vezes coloca o valor numa linha separada do rótulo.
+            # Aceita apenas uma linha contendo exclusivamente dinheiro.
+            for seguinte in linhas[i + 1:i + 3]:
+                if re.fullmatch(r'(?:R\$\s*)?' + moeda.pattern, seguinte):
+                    valores = moeda.findall(seguinte)
+                    break
+                if re.search(r'[A-Za-z]', seguinte):
+                    break
+        if len(valores) == 1:
+            candidatos.append((prioridade, valores[0].replace('.', '').replace(',', '.')
+                               if ',' in valores[0] else valores[0]))
+    if candidatos:
+        melhor = max(p for p, _ in candidatos)
+        totais = {v for p, v in candidatos if p == melhor}
+        # Totais conflitantes exigem revisão, sem escolher arbitrariamente.
+        if len(totais) == 1:
+            dados['valor'] = 'R$ ' + format(Decimal(totais.pop()), ',.2f').replace(
+                ',', '_').replace('.', ',').replace('_', '.')
+    datas = []
     for linha in linhas:
-        linha = linha.strip()
-        
-        # Tentativa simples de extrair valor (R$ ou números com vírgula)
-        if 'R$' in linha or ',' in linha:
-            if not dados['valor']:
-                dados['valor'] = linha
-        
-        # Primeira linha não vazia geralmente é o nome do estabelecimento
-        if not dados['local'] and linha and len(linha) > 3:
-            dados['local'] = linha
-    
+        for dia, mes, ano in re.findall(r'\b(\d{2})[/-](\d{2})[/-](\d{4})\b', linha):
+            try:
+                data = datetime(int(ano), int(mes), int(dia))
+            except ValueError:
+                continue
+            rotulo = normalizar(linha)
+            prioridade = 2 if any(x in rotulo for x in ('emissao', 'autorizacao')) else 1
+            datas.append((prioridade, data.strftime('%d/%m/%Y')))
+    if datas:
+        melhor = max(p for p, _ in datas)
+        opcoes = {d for p, d in datas if p == melhor}
+        if len(opcoes) == 1:
+            dados['data'] = opcoes.pop()
     return dados
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
