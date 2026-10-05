@@ -51,8 +51,103 @@ def ler_imagem(image_bytes):
     texto = parsed[0]['ParsedText']
     return texto, None
 
+
+def extrair_conta(texto):
+    """Contas de consumo: não confundir subtotal, tributo ou vencimento."""
+    def norm(value):
+        return ''.join(c for c in unicodedata.normalize('NFKD', value.lower())
+                       if not unicodedata.combining(c))
+    normal = norm(texto)
+    providers = [('sabesp', 'Sabesp', 'Água'), ('sanepar', 'Sanepar', 'Água'),
+                 ('copasa', 'Copasa', 'Água'), ('casan', 'Casan', 'Água'),
+                 ('cedae', 'Cedae', 'Água'), ('celesc', 'Celesc', 'Energia'),
+                 ('cemig', 'Cemig', 'Energia'), ('copel', 'Copel', 'Energia'),
+                 ('enel', 'Enel', 'Energia'), ('energisa', 'Energisa', 'Energia')]
+    provider = next(((name, cat) for term, name, cat in providers
+                     if re.search(r'\b' + term + r'\b', normal)), None)
+    if not provider and re.search(r'agua\s+e\s+[ef]sgoto', normal):
+        provider = ('Água e esgoto', 'Água')
+    if not provider:
+        return None
+    name, category = provider
+    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+    moeda = re.compile(r'(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+|\d+)[,.]\d{2}(?![\d.,])')
+    candidates = []
+    dates, due = [], []
+    def date_values(line):
+        # Reparar apenas datas de oito dígitos ou DDMM/AAAA junto a rótulos.
+        line = re.sub(r'\b(\d{2})(\d{2})/(\d{4})\b', r'\1/\2/\3', line)
+        values = []
+        for day, month, year in re.findall(r'\b(\d{2})[/-](\d{2})[/-](\d{4})\b', line):
+            try:
+                values.append(datetime(int(year), int(month), int(day)).strftime('%d/%m/%Y'))
+            except ValueError:
+                pass
+        return values
+    for i, line in enumerate(linhas):
+        label = norm(line)
+        priority = 0
+        if re.search(r'\b(?:total\s*\(\s*r\s*\$\s*\)|total\s+a\s+pagar|valor\s+(?:total\s+da\s+fatura|da\s+fatura|a\s+pagar))', label):
+            priority = 4
+        elif re.search(r'\btotal\b', label) and not re.search(r'subtotal|tribut|agua|esgoto|[ef]sgoto', label):
+            priority = 3
+        if priority:
+            # Na mesma linha podem aparecer água e esgoto antes do total.
+            total_label = re.search(r'\b(?:total\s*\(\s*r\s*\$\s*\)|total\s+a\s+pagar|valor\s+(?:total\s+da\s+fatura|da\s+fatura|a\s+pagar)|total\b)', label)
+            values = moeda.findall(line[total_label.end():]) if total_label else []
+            if not values:
+                for following in linhas[i+1:i+3]:
+                    # Linhas de tabela podem conter código e duas datas.
+                    if re.search(r'[a-zA-Z]{3,}', following):
+                        break
+                    values = moeda.findall(following)
+                    if values:
+                        break
+            if len(values) == 1:
+                number = values[0].replace('.', '').replace(',', '.') if ',' in values[0] else values[0]
+                candidates.append((priority, Decimal(number)))
+        if 'emissao' in label or 'apresentacao' in label:
+            values = date_values(line)
+            if not values:
+                for following in linhas[i+1:i+3]:
+                    if re.search(r'[a-zA-Z]{3,}', following):
+                        break
+                    values = date_values(following)
+                    if values:
+                        break
+            if values:
+                dates.append((2 if 'emissao' in label else 1, values[0],
+                              'emissão' if 'emissao' in label else 'apresentação'))
+                if 'vencimento' in label and len(values) == 2:
+                    due.append(values[1])
+        elif 'vencimento' in label:
+            values = date_values(line)
+            if not values and i+1 < len(linhas):
+                values = date_values(linhas[i+1])
+            due.extend(values)
+    amount = ''
+    if candidates:
+        rank = max(p for p, value in candidates)
+        values = {value for p, value in candidates if p == rank}
+        if len(values) == 1:
+            amount = family.money(values.pop())
+    document_date, date_label = '', 'Data do documento'
+    if dates:
+        rank = max(p for p, value, kind in dates)
+        values = {(value, kind) for p, value, kind in dates if p == rank}
+        if len(values) == 1:
+            document_date, kind = values.pop()
+            date_label = 'Data de ' + kind
+    return {'local': name + (' — Conta de água' if category == 'Água' else ' — Conta de energia'),
+            'valor': amount, 'data': document_date, 'texto_completo': texto,
+            'document_type': 'bill', 'category': category, 'date_label': date_label,
+            'due_date': next(iter(set(due))) if len(set(due)) == 1 else ''}
+
 def extrair_dados(texto):
     """Procura o total explicitamente; nunca usa quantidade como valor."""
+    conta = extrair_conta(texto)
+    if conta:
+        return conta
     linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
     dados = {'local': '', 'valor': '', 'data': '', 'texto_completo': texto}
     if linhas:
@@ -215,18 +310,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Extrai dados
         dados = extrair_dados(texto)
         
-        detalhes = formatar_itens(texto, dados["valor"])
+        is_bill = dados.get("document_type") == "bill"
+        detalhes = None if is_bill else formatar_itens(texto, dados["valor"])
 
         amount = family.parse_amount(dados["valor"]) if dados["valor"] else None
         expense_date = datetime.strptime(dados["data"], "%d/%m/%Y").date().isoformat() if dados["data"] else None
         items = [{key: str(value) if isinstance(value, Decimal) else value
-                  for key, value in item.items()} for item in extrair_itens(texto)]
+                  for key, value in item.items()} for item in ([] if is_bill else extrair_itens(texto))]
         await family.propose(update, context, {
             "description": (dados["local"] or "Compra sem descrição")[:250],
-            "amount": amount, "date": expense_date, "category": "Outros", "items": items
+            "amount": amount, "date": expense_date, "category": dados.get("category", "Outros"), "items": items,
+            "document_type": dados.get("document_type", "receipt"),
+            "date_label": dados.get("date_label", "Data da compra"), "due_date": dados.get("due_date", "")
         }, f"photo:{update.effective_chat.id}:{update.message.message_id}", detalhes)
 
-        if not extrair_itens(texto) and update.effective_chat.type == "private":
+        if (not amount or not expense_date or (not is_bill and not items)) and update.effective_chat.type == "private":
             # A leitura vai apenas para a conversa que enviou a nota.
             # Não gravar texto de notas em logs públicos ou no repositório.
             diagnostico = io.BytesIO(texto.encode("utf-8"))
