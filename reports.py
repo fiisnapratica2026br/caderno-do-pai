@@ -45,7 +45,9 @@ def excel(rows, house, month):
     if len(rows) >= 2000:
         cell(summary, 'A30', 'Limite de 2.000 registros atingido. Este relatório pode estar incompleto.')
     total, categories = stats(rows)
-    cached = {'B4': total, 'B5': len(rows), 'B6': total / len(rows) if rows else 0}
+    pending = sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status') == 'pending'),Decimal('0'))
+    paid = sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status') == 'paid'),Decimal('0'))
+    cached = {'B4': total, 'B5': len(rows), 'B6': total / len(rows) if rows else 0,'B33':total-pending-paid,'B34':paid,'B35':pending}
     for c in summary.iter(tag('c')):
         address = c.get('r')
         if c.find(tag('f')) is None: continue
@@ -62,12 +64,13 @@ def excel(rows, house, month):
         old.text = str(cached[address]); c.set('t', 'n')
     for n, row in enumerate(rows, 5):
         created = datetime.fromisoformat(row['created_at'].replace('Z','+00:00')).astimezone(TZ)
-        values = [row['id'], date.fromisoformat(row['expense_date']).strftime('%d/%m/%Y'), created.strftime('%d/%m/%Y %H:%M'), row['description'], row['category'], Decimal(str(row['amount']))]
-        for col, value in zip('ABCDEF', values): cell(detail, f'{col}{n}', value, col in 'AF')
+        def day(key): return date.fromisoformat(row[key]).strftime('%d/%m/%Y') if row.get(key) else ''
+        values = [row['id'], day('expense_date') if row.get('document_type') != 'bill' else '', created.strftime('%d/%m/%Y %H:%M'), row['description'], row['category'], Decimal(str(row['amount'])),day('document_date'),day('due_date'),{'pending':'A pagar','paid':'Paga'}.get(row.get('payment_status'),'Compra registrada'),day('payment_date'),'Conta' if row.get('document_type')=='bill' else 'Compra']
+        for col, value in zip('ABCDEFGHIJK', values): cell(detail, f'{col}{n}', value, col in 'AF')
     data = detail.find(tag('sheetData'))
     for r in list(data):
         if int(r.get('r')) > max(4, len(rows)+4): data.remove(r)
-    filt = ET.Element(tag('autoFilter'), {'ref': f'A4:F{max(4,len(rows)+4)}'})
+    filt = ET.Element(tag('autoFilter'), {'ref': f'A4:K{max(4,len(rows)+4)}'})
     detail.insert(list(detail).index(data)+1, filt)
     out = io.BytesIO()
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as dest:
@@ -89,11 +92,13 @@ def pdf(rows, house, month):
     styles.add(ParagraphStyle(name='Brand', fontName='Helvetica-Bold',fontSize=24,leading=29,textColor=colors.HexColor('#143D32'),spaceAfter=10))
     styles.add(ParagraphStyle(name='SmallCell',fontSize=9,leading=13))
     p=lambda text, style='Normal': Paragraph(escape(clean(text)),styles[style])
-    story=[p('Caderno do Pai','Brand'),p(f'{house} | Gastos de {month:%m/%Y}','Heading2'),p('Resumo por data da compra. Valores registrados pela família.'),Spacer(1,18)]
+    story=[p('Caderno do Pai','Brand'),p(f'{house} | Controle de {month:%m/%Y}','Heading2'),p('Compras pela compra; contas pagas pelo pagamento; pendentes pelo vencimento.'),Spacer(1,18)]
     if len(rows)>=2000: story += [p('Atenção: limite de 2.000 registros atingido. Este relatório pode estar incompleto.'),Spacer(1,10)]
     if not rows: story += [p('Nenhum gasto registrado neste mês.')]
     else:
-        card=Table([[p('TOTAL REGISTRADO'),p('LANÇAMENTOS'),p('MÉDIA POR LANÇAMENTO')],[p(brl(total),'Heading2'),p(str(len(rows)),'Heading2'),p(brl(total/len(rows)),'Heading2')]],colWidths=[173,100,242])
+        pending=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='pending'),Decimal('0'))
+        paid=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='paid'),Decimal('0'))
+        card=Table([[p('COMPRAS REGISTRADAS'),p('CONTAS PAGAS'),p('CONTAS A PAGAR')],[p(brl(total-pending-paid),'Heading2'),p(brl(paid),'Heading2'),p(brl(pending),'Heading2')]],colWidths=[173,171,171])
         card.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#EAF3EE')),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),12),('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10)]));story += [card,Spacer(1,18),p('Onde o dinheiro foi','Heading2')]
         height=len(categories)*29+8; graph=Drawing(515,height); maximum=max(v for _,v in categories)
         for i,(name,value) in enumerate(categories):
@@ -102,9 +107,11 @@ def pdf(rows, house, month):
             graph.add(Rect(170,y+4,190*float(value/maximum),13,fillColor=colors.HexColor('#388268'),strokeColor=None))
             graph.add(String(375,y+7,brl(value)+f' ({float(value/total):.1%})',fontSize=9))
         story += [graph,Spacer(1,14),p('Maiores despesas','Heading2')]
-        table=[[p('Compra','SmallCell'),p('Descrição / categoria','SmallCell'),p('Valor','SmallCell')]]
+        table=[[p('Data / situação','SmallCell'),p('Descrição / categoria','SmallCell'),p('Valor','SmallCell')]]
         for row in sorted(rows,key=lambda r:Decimal(str(r['amount'])),reverse=True)[:5]:
-            table.append([p(date.fromisoformat(row['expense_date']).strftime('%d/%m/%Y'),'SmallCell'),p(row['description']+' | '+row['category'],'SmallCell'),p(brl(row['amount']),'SmallCell')])
+            key = 'payment_date' if row.get('payment_status')=='paid' else ('due_date' if row.get('document_type')=='bill' else 'expense_date')
+            label = {'pending':'A pagar','paid':'Paga'}.get(row.get('payment_status'),'Compra')
+            table.append([p(date.fromisoformat(row[key]).strftime('%d/%m/%Y')+' / '+label,'SmallCell'),p(row['description']+' | '+row['category'],'SmallCell'),p(brl(row['amount']),'SmallCell')])
         t=Table(table,colWidths=[75,340,100],repeatRows=1);t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#EAF3EE')),('VALIGN',(0,0),(-1,-1),'TOP'),('BOTTOMPADDING',(0,0),(-1,-1),9),('TOPPADDING',(0,0),(-1,-1),9),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#D7E3DC'))]));story += [t,Spacer(1,16)]
         others=dict(categories).get('Outros',0)
         if others: story += [p(f'{brl(others)} estão em Outros. Revisar essas categorias deixa o resumo mais útil.'),Spacer(1,10)]
