@@ -46,9 +46,9 @@ async def show_expense(message, user, identifier):
 
 
 CATEGORIES = [
-    "Água", "Energia", "Supermercado", "Combustível", "Moradia",
+    "Água", "Energia elétrica", "Supermercado", "Combustível", "Moradia",
     "Internet e telefone", "Saúde", "Educação", "Transporte",
-    "Casa e manutenção", "Impostos e taxas", "Lazer", "Vestuário", "Pets", "Outros", "Alimentação fora de casa",
+    "Casa e manutenção", "Impostos e taxas", "Lazer", "Vestuário", "Pets", "Outros", "Alimentação fora de casa", "Compras na internet",
 ]
 
 
