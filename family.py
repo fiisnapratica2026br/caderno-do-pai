@@ -19,17 +19,31 @@ MENU = ReplyKeyboardMarkup([
     ["➕ Adicionar gasto", "📸 Enviar nota"],
     ["📊 Resumo do mês", "📋 Histórico"],
     ["📥 Exportar planilha", "📄 Relatório PDF"],
-    ["🏠 Minha casa"],
+    ["📆 Contas a pagar", "🏠 Minha casa"],
 ], resize_keyboard=True)
 
 def expense_text(row):
+    if row.get("document_type") == "bill":
+        return (f"🧾 Conta #{row['id']}\n\n🏪 {row['description']}\n💰 {money(row['amount'])}\n"
+                f"📅 Documento: {purchase_date(row.get('document_date')) if row.get('document_date') else 'Não informada'}\n"
+                f"📆 Vencimento: {purchase_date(row.get('due_date'))}\n"
+                f"Situação: {'Paga' if row.get('payment_status') == 'paid' else 'A pagar'}\n"
+                f"Pagamento: {purchase_date(row.get('payment_date')) if row.get('payment_date') else 'Não informado'}\n"
+                f"📂 {row['category']}\n🕒 Lançado: {registration_date(row['created_at'])}")
     return (f"🧾 Gasto #{row['id']}\n\n"
             f"🏪 {row['description']}\n💰 {money(row['amount'])}\n"
             f"📅 Compra: {purchase_date(row['expense_date'])}\n"
             f"🕒 Lançado: {registration_date(row['created_at'])}\n"
             f"📂 {row['category']}")
 
-def expense_buttons(identifier):
+def expense_buttons(identifier, row=None):
+    if row and row.get('document_type') == 'bill':
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('Marcar como paga / corrigir pagamento', callback_data=f'billpay:{identifier}')],
+            [InlineKeyboardButton('Vencimento', callback_data=f'billdue:{identifier}'), InlineKeyboardButton('Emissão / documento', callback_data=f'billdoc:{identifier}')],
+            [InlineKeyboardButton('Voltar para a pagar', callback_data=f'billpending:{identifier}')],
+            [InlineKeyboardButton('Valor', callback_data=f'expamount:{identifier}'),InlineKeyboardButton('Categoria',callback_data=f'expcategory:{identifier}')],
+            [InlineKeyboardButton('Descrição',callback_data=f'expdescription:{identifier}')]])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Valor", callback_data=f"expamount:{identifier}"),
          InlineKeyboardButton("Data da compra", callback_data=f"expdate:{identifier}")],
@@ -43,7 +57,7 @@ async def show_expense(message, user, identifier):
     if row.get("missing"):
         await message.reply_text("Gasto não encontrado nesta casa.")
         return
-    await message.reply_text(expense_text(row), reply_markup=expense_buttons(identifier))
+    await message.reply_text(expense_text(row), reply_markup=expense_buttons(identifier, row))
 
 
 CATEGORIES = [
@@ -95,7 +109,15 @@ def parse_amount(value):
     return format(amount.quantize(Decimal("0.01")), "f")
 
 
-def buttons(draft_id):
+def buttons(draft_id, data=None):
+    if data and data.get('document_type') == 'bill':
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('Salvar conta',callback_data='save:'+draft_id),InlineKeyboardButton('Cancelar',callback_data='cancel:'+draft_id)],
+            [InlineKeyboardButton('Valor',callback_data='amount:'+draft_id),InlineKeyboardButton('Vencimento',callback_data='due_date:'+draft_id)],
+            [InlineKeyboardButton('Emissão / documento',callback_data='document_date:'+draft_id),InlineKeyboardButton('Categoria',callback_data='category:'+draft_id)],
+            [InlineKeyboardButton('Já paguei / data do pagamento',callback_data='payment_date:'+draft_id)],
+            [InlineKeyboardButton('Ainda está a pagar',callback_data='unpaid:'+draft_id)],
+            [InlineKeyboardButton('Descrição',callback_data='description:'+draft_id)]])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Salvar gasto", callback_data="save:"+draft_id),
          InlineKeyboardButton("Cancelar", callback_data="cancel:"+draft_id)],
@@ -114,6 +136,15 @@ async def private(update):
 
 
 def draft_text(data):
+    if data.get('document_type') == 'bill':
+        return ("🧾 Confira a conta antes de salvar\n\n"
+            f"🏪 {data.get('description')}\n💰 {money(data['amount']) if data.get('amount') else 'Corrija o valor'}\n"
+            f"📅 Emissão / documento: {purchase_date(data.get('document_date')) if data.get('document_date') else 'Não identificada'}\n"
+            f"📆 Vencimento: {purchase_date(data.get('due_date'))}\n"
+            f"Situação: {'Paga' if data.get('payment_status') == 'paid' else 'A pagar'}\n"
+            f"Pagamento: {purchase_date(data.get('payment_date')) if data.get('payment_date') else 'Não informado'}\n"
+            f"📂 {data.get('category', 'Outros')}\n\n"
+            "Confira o vencimento. A conta só fica paga quando você informar a data do pagamento.")
     return (
         "🧾 Confira antes de salvar\n\n"
         f"🏪 {data.get('description') or 'Descrição não identificada'}\n"
@@ -144,6 +175,12 @@ async def propose(update, context, data, source_key, details=None):
     if not await private(update):
         return
     data = dict(data)
+    if data.get('document_type') == 'bill':
+        data['document_date'] = data.get('date')
+        if data.get('due_date'):
+            data['due_date'] = datetime.strptime(data['due_date'], '%d/%m/%Y').date().isoformat()
+        data['payment_status'] = 'pending'
+        data['payment_date'] = None
     if data.get("category", "Outros") == "Outros":
         data["category"] = suggest_category(data.get("description", ""), data.get("items"), data.get("amount"))
         data["category_auto"] = True
@@ -154,7 +191,7 @@ async def propose(update, context, data, source_key, details=None):
     preview = draft_text(data)
     if check.get("duplicates"):
         preview += "\n\n" + duplicate_text(check["duplicates"])
-    await update.effective_message.reply_text(preview, reply_markup=buttons(draft_id))
+    await update.effective_message.reply_text(preview, reply_markup=buttons(draft_id, data))
     if details:
         # Respeita o limite de caracteres das mensagens do Telegram.
         for offset in range(0, len(details), 3500):
@@ -177,6 +214,7 @@ async def home(update, context):
         "/planilha — baixar Excel com resumo e gastos\n"
         "/relatorio — relatório do mês em PDF\n"
         "/csv — exportação simples\n"
+        "/contas — contas a pagar, inclusive atrasadas\n"
         "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"
@@ -194,6 +232,9 @@ async def handle_text(update, context):
         context.user_data.pop("editing", None)
         context.args = []
         await report(update, context)
+        return
+    if value == '📆 Contas a pagar':
+        await bills(update, context)
         return
     if value == "🏠 Minha casa":
         context.user_data.pop("editing", None)
@@ -214,8 +255,11 @@ async def handle_text(update, context):
         try:
             if field == "amount":
                 parsed = parse_amount(value)
-            elif field == "date":
-                parsed = datetime.strptime(value, "%d/%m/%Y").date().isoformat()
+            elif field in ("date", "due_date", "document_date", "payment_date"):
+                parsed_date = datetime.strptime(value, "%d/%m/%Y").date()
+                if field == 'payment_date' and parsed_date > datetime.now(TZ).date():
+                    raise ValueError('Pagamento futuro')
+                parsed = parsed_date.isoformat()
             else:
                 maximum = 250 if field == "description" else 60
                 if not 1 <= len(value) <= maximum:
@@ -226,16 +270,20 @@ async def handle_text(update, context):
             return
         if draft_id.startswith("expense:"):
             identifier = draft_id.split(":", 1)[1]
-            result = await api(update.effective_user.id, "update_expense",
-                {"expense_id": int(identifier), "patch": {field: parsed}})
+            patch = {field: parsed}
+            action = 'update_bill' if field in ('document_date','due_date','payment_date') else 'update_expense'
+            if field == 'payment_date': patch['payment_status'] = 'paid'
+            result = await api(update.effective_user.id, action,
+                {'expense_id': int(identifier), 'patch': patch})
             context.user_data.pop("editing", None)
             if result.get("missing"):
                 await update.message.reply_text("Gasto não encontrado nesta casa.")
             else:
                 await update.message.reply_text("✅ Alteração salva.\n\n" + expense_text(result),
-                    reply_markup=expense_buttons(identifier))
+                    reply_markup=expense_buttons(identifier, result))
             return
         patch = {field: parsed}
+        if field == 'payment_date': patch['payment_status'] = 'paid'
         if field == "description":
             draft = await api(update.effective_user.id, "get_draft", {"id": draft_id})
             data = draft.get("data", {})
@@ -248,7 +296,7 @@ async def handle_text(update, context):
         if "saved" in result:
             await update.message.reply_text("Esse gasto já foi salvo; crie um novo registro para outra compra.")
         else:
-            await update.message.reply_text(draft_text(result), reply_markup=buttons(draft_id))
+            await update.message.reply_text(draft_text(result), reply_markup=buttons(draft_id, result))
         return
     match = re.fullmatch(r"(.+?)\s+(\d[\d.,]*)", value)
     if not match:
@@ -280,6 +328,17 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action in ('billpay','billdue','billdoc','billpending'):
+        row = await api(user, 'get_expense', {'expense_id':int(identifier)})
+        if row.get('missing') or row.get('document_type') != 'bill':
+            await q.message.reply_text('Conta não encontrada nesta casa.'); return
+        if action == 'billpending':
+            context.user_data.pop('editing',None)
+            result = await api(user,'update_bill',{'expense_id':int(identifier),'patch':{'payment_status':'pending'}})
+            await q.message.reply_text(expense_text(result),reply_markup=expense_buttons(identifier,result)); return
+        field = {'billpay':'payment_date','billdue':'due_date','billdoc':'document_date'}[action]
+        context.user_data['editing']=(field,'expense:'+identifier)
+        await q.message.reply_text('Digite a data em DD/MM/AAAA. Para pagamento, informe o dia em que pagou. A alteração será salva ao enviar. /cancelar para desistir.');return
     if action == "expense":
         context.user_data.pop("editing", None)
         await show_expense(q.message, user, identifier)
@@ -298,7 +357,7 @@ async def callback(update, context):
         context.user_data.pop("editing", None)
         await q.edit_message_text("Gasto não encontrado nesta casa." if result.get("missing")
             else "✅ Categoria salva.\n\n" + expense_text(result),
-            reply_markup=None if result.get("missing") else expense_buttons(identifier))
+            reply_markup=None if result.get("missing") else expense_buttons(identifier, result))
         return
     if action in ("expamount", "expdate", "expdescription", "expcategory"):
         row = await api(user, "get_expense", {"expense_id": int(identifier)})
@@ -329,7 +388,7 @@ async def callback(update, context):
         if "saved" in result:
             await q.message.reply_text("Esse gasto já foi salvo.")
         else:
-            await q.edit_message_text(draft_text(result), reply_markup=buttons(draft_id))
+            await q.edit_message_text(draft_text(result), reply_markup=buttons(draft_id, result))
         return
     if action == "askdelete":
         await q.message.reply_text(f"Excluir o gasto #{identifier} desta casa?",
@@ -350,13 +409,19 @@ async def callback(update, context):
         if draft.get("saved_expense_id") or draft.get("cancelled"):
             await q.message.reply_text("Esse registro já foi concluído.")
         else:
-            await q.edit_message_text(draft_text(draft["data"]), reply_markup=buttons(identifier))
+            await q.edit_message_text(draft_text(draft["data"]), reply_markup=buttons(identifier, draft["data"]))
         return
     if action in ("save", "cancel", "force"):
         payload = {"id": identifier}
         if action == "force":
             identifier, token = identifier.rsplit(":", 1)
             payload = {"id": identifier, "duplicate_token": token}
+        if action != 'cancel':
+            draft = await api(user,'get_draft',{'id':identifier})
+            data = draft.get('data',{})
+            if data.get('document_type') == 'bill' and not draft.get('saved_expense_id'):
+                if not data.get('amount') or not data.get('due_date'):
+                    await q.message.reply_text('Informe o valor e o vencimento antes de salvar a conta.');return
         result = await api(user, "cancel" if action == "cancel" else "confirm", payload)
         if result.get("duplicates"):
             await q.edit_message_text(duplicate_text(result["duplicates"]),
@@ -369,12 +434,17 @@ async def callback(update, context):
             return
         context.user_data.pop("editing", None)
         await q.edit_message_text(
-            f"✅ Gasto salvo para a casa. Registro #{result['saved']}.\nUse o menu para consultar os gastos."
+            f"✅ Registro #{result['saved']} salvo para a casa.\nUse o menu para consultar os gastos e contas."
             if result.get("saved") else "Registro cancelado.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Editar gasto",
                 callback_data=f"expense:{result['saved']}")]]) if result.get("saved") else None)
         return
-    if action not in ("amount", "date", "description", "category"):
+    if action == 'unpaid':
+        result=await api(user,'edit',{'id':identifier,'patch':{'payment_status':'pending','payment_date':None}})
+        if 'saved' in result: await q.message.reply_text('Esse registro já foi salvo.')
+        else: await q.edit_message_text(draft_text(result),reply_markup=buttons(identifier,result))
+        return
+    if action not in ("amount", "date", "description", "category", "due_date", "document_date", "payment_date"):
         return
     draft = await api(user, "get_draft", {"id": identifier})
     if draft.get("saved_expense_id") or draft.get("cancelled"):
@@ -385,7 +455,7 @@ async def callback(update, context):
         await q.message.reply_text("Escolha a categoria deste gasto:", reply_markup=category_buttons(identifier))
         return
     context.user_data["editing"] = (action, identifier)
-    prompts = {"amount": "Digite o valor correto. Exemplo: 149,95",
+    prompts = {'due_date':'Digite o vencimento: DD/MM/AAAA.', 'document_date':'Digite a emissão / data do documento: DD/MM/AAAA.', 'payment_date':'Digite o dia em que pagou: DD/MM/AAAA. Não use uma data futura.', "amount": "Digite o valor correto. Exemplo: 149,95",
         "date": "Digite a data real da compra com ano. Exemplo: 03/05/2026. A data do lançamento será automática.",
         "description": "Digite o nome da loja ou a descrição do gasto.",
         "category": "Digite a categoria: Mercado, Casa, Transporte, Saúde, Educação, Lazer ou Outros."}
@@ -420,24 +490,25 @@ async def report(update, context):
         builder = excel if command == "/planilha" else pdf
         file = await asyncio.to_thread(builder, rows, household["name"], start)
         await update.message.reply_document(file,
-            caption=f"Gastos de {start:%m/%Y}. Por data da compra. Categorias conforme os registros salvos.")
+            caption=f"Controle de {start:%m/%Y}. Compras pela data da compra; contas pelo pagamento ou vencimento.")
     elif command == "/csv":
         out = io.StringIO()
         writer = csv.writer(out, delimiter=";")
-        writer.writerow(["Registro", "Data da compra", "Lançado em (Brasília)", "Descrição", "Categoria", "Valor (R$)"])
+        writer.writerow(["Registro", "Data da compra", "Lançado em (Brasília)", "Descrição", "Categoria", "Valor (R$)", "Documento", "Vencimento", "Situação", "Pagamento"])
         def safe_cell(value):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
         for row in rows:
-            writer.writerow([row["id"], purchase_date(row["expense_date"]), registration_date(row["created_at"]), safe_cell(row["description"]),
-                safe_cell(row["category"]), format(Decimal(str(row["amount"])), ".2f").replace(".", ",")])
+            writer.writerow([row["id"], purchase_date(row["expense_date"]) if row.get("document_type")!="bill" else "", registration_date(row["created_at"]), safe_cell(row["description"]),
+                safe_cell(row["category"]), format(Decimal(str(row["amount"])), ".2f").replace(".", ","), row.get("document_date") or "", row.get("due_date") or "", {"pending":"A pagar","paid":"Paga","recorded":"Compra registrada"}.get(row.get("payment_status"),"Compra registrada"),row.get("payment_date") or ""])
         file = io.BytesIO(out.getvalue().encode("utf-8-sig"))
         file.name = f"gastos-da-casa-{start:%Y-%m}.csv"
         await update.message.reply_document(file, caption="Planilha do mês. Abre no Excel ou Google Planilhas.")
     elif command == "/historico":
         lines = [f"#{r['id']} · {r['description'][:60]} · {money(r['amount'])}\n"
-                 f"Compra: {purchase_date(r['expense_date'])} · Lançado: {registration_date(r['created_at'])}\n"
-                 f"Categoria: {r['category']}" for r in rows[:20]]
+                 f"Data: {purchase_date(r.get('document_date') if r.get('document_type')=='bill' else r['expense_date'])} · Lançado: {registration_date(r['created_at'])}\n"
+                 f"Categoria: {r['category']}\n"
+                 + (f"Conta: {'Paga' if r.get('payment_status')=='paid' else 'A pagar'} | Vencimento: {purchase_date(r.get('due_date'))}" if r.get('document_type')=='bill' else '') for r in rows[:20]]
         text = "🏠 Gastos do mês\n\n" + ("\n\n".join(lines) or "Nenhum gasto registrado.")
         if not rows:
             await update.message.reply_text(text)
@@ -452,7 +523,10 @@ async def report(update, context):
             total += Decimal(str(row["amount"]))
             categories[row["category"]] += Decimal(str(row["amount"]))
         lines = [f"• {cat}: {money(amount)}" for cat, amount in sorted(categories.items(), key=lambda x: -x[1])]
-        text = f"🏠 Resumo da casa · {start:%m/%Y}\nPor data da compra\n\nTotal registrado: {money(total)}\nCompras: {len(rows)}\n\n" + "\n".join(lines)
+        pending=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='pending'),Decimal('0'))
+        paid=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='paid'),Decimal('0'))
+        purchases=total-pending-paid
+        text = (f"🏠 Resumo da casa · {start:%m/%Y}\n\nCompras registradas: {money(purchases)}\nContas pagas: {money(paid)}\nContas a pagar: {money(pending)}\nTotal de compromissos: {money(total)}\nRegistros: {len(rows)}\n\nCompras pela data da compra; contas pagas pelo pagamento; pendentes pelo vencimento.\n\n" + "\n".join(lines))
         for offset in range(0, len(text), 3500):
             await update.message.reply_text(text[offset:offset+3500])
     if len(rows) == 2000:
@@ -496,8 +570,23 @@ async def error_handler(update, context):
             "Se estiver salvando uma nota, tente o botão novamente.")
 
 
+async def bills(update,context):
+    if not await private(update): return
+    context.user_data.pop('editing',None)
+    rows=await api(update.effective_user.id,'bills')
+    if not rows:
+        await update.effective_message.reply_text('Nenhuma conta a pagar.',reply_markup=MENU);return
+    today=datetime.now(TZ).date()
+    await update.effective_message.reply_text('📆 Contas a pagar (até 100, por vencimento)')
+    for row in rows:
+        due=date.fromisoformat(row['due_date'])
+        label='Atrasada' if due<today else ('Vence hoje' if due==today else 'A vencer')
+        await update.effective_message.reply_text(label+'\n'+expense_text(row),reply_markup=expense_buttons(row['id'],row))
+
+
 def register(app):
     app.add_handler(CommandHandler(["start", "casa", "menu"], home))
+    app.add_handler(CommandHandler("contas", bills))
     app.add_handler(CommandHandler("editar", edit_expense))
     app.add_handler(CommandHandler(["resumo", "historico", "planilha", "relatorio", "csv"], report))
     app.add_handler(CommandHandler("excluir", delete))
@@ -505,3 +594,4 @@ def register(app):
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
+
