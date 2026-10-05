@@ -109,6 +109,66 @@ def extrair_dados(texto):
             dados['data'] = opcoes.pop()
     return dados
 
+def extrair_itens(texto):
+    """Reconhece linhas comuns de cupom; conserva itens ausentes como dúvida."""
+    linhas = [l.strip() for l in texto.splitlines() if l.strip()]
+    numero = r'(?:\d{1,3}(?:\.\d{3})+|\d+)[,.]\d{2}'
+    padrao = re.compile(
+        r'(?P<qtd>\d+(?:[,.]\d{1,3})?)\s*'
+        r'(?P<un>UN|UND|UNID|PC|PÇ|KG|G|LT|L|MT|M|CX|PCT)'
+        r'\s*(?:X|×)?\s*(?:R\$\s*)?'
+        r'(?P<unit>' + numero + r')\s+(?:R\$\s*)?'
+        r'(?P<total>' + numero + r')(?![\d.,])', re.I)
+    def decimal(valor):
+        return Decimal(valor.replace('.', '').replace(',', '.')) if ',' in valor else Decimal(valor)
+    itens = []
+    for i, linha in enumerate(linhas):
+        encontrado = padrao.search(linha)
+        if not encontrado:
+            continue
+        descricao = linha[:encontrado.start()].strip()
+        if not descricao and i:
+            descricao = linhas[i - 1]
+        descricao = re.sub(r'^\d{3,14}\s+', '', descricao).strip()
+        if not descricao or any(p in descricao.lower() for p in
+                               ('total', 'tribut', 'pagamento', 'troco')):
+            continue
+        qtd = Decimal(encontrado['qtd'].replace(',', '.'))
+        unitario = decimal(encontrado['unit'])
+        subtotal = decimal(encontrado['total'])
+        itens.append({'descricao': descricao, 'quantidade': qtd,
+                      'unidade': encontrado['un'].upper(), 'unitario': unitario,
+                      'subtotal': subtotal,
+                      'conferido': abs(qtd * unitario - subtotal) <= Decimal('0.02')})
+    return itens
+
+
+def formatar_itens(texto, valor_total):
+    itens = extrair_itens(texto)
+    if not itens:
+        return "\n🛒 Não consegui identificar os produtos com segurança.\n"
+    def dinheiro(valor):
+        return 'R$ ' + format(valor, ',.2f').replace(',', '_').replace('.', ',').replace('_', '.')
+    partes = ["\n🛒 Produtos identificados:"]
+    for item in itens[:20]:
+        qtd = format(item['quantidade'], 'f').rstrip('0').rstrip('.') if '.' in str(item['quantidade']) else str(item['quantidade'])
+        partes.append(
+            f"• {item['descricao'][:100]}\n"
+            f"  {qtd.replace('.', ',')} {item['unidade']} × {dinheiro(item['unitario'])}"
+            f" = {dinheiro(item['subtotal'])}"
+            + ("" if item['conferido'] else " ⚠️ conferir"))
+    if len(itens) > 20:
+        partes.append(f"Mais {len(itens) - 20} produtos identificados.")
+    soma = sum((item['subtotal'] for item in itens), Decimal('0'))
+    partes.append(f"Soma dos itens identificados: {dinheiro(soma)}")
+    if valor_total:
+        total = Decimal(valor_total.replace('R$ ', '').replace('.', '').replace(',', '.'))
+        if soma == total and all(item['conferido'] for item in itens):
+            partes.append("✓ A soma dos itens bate com o total lido.")
+        else:
+            partes.append("⚠️ A soma ou os preços precisam de revisão; pode haver itens ausentes, descontos ou erro de leitura.")
+    return "\n".join(partes) + "\n"
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🧾 *Bem-vindo ao Caderno do Pai - Controle de Gastos*\n\n"
@@ -136,12 +196,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Extrai dados
         dados = extrair_dados(texto)
         
+        detalhes = formatar_itens(texto, dados["valor"])
+
         # Formata resposta visual
         resposta = (
             f"🧾 Nota lida (teste)\n\n"
             f"🏪 Local: {dados['local'] or 'Não identificado'}\n"
             f"💰 Valor: {dados['valor'] or 'Não identificado'}\n"
             f"📅 Data: {dados['data'] or 'Não identificada'}\n\n"
+            f"{detalhes}\n"
             f"ℹ️ A gravação na planilha ainda não está configurada.\n"
             f"⚠️ Confira os valores, a leitura automática pode errar."
         )
