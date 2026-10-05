@@ -99,7 +99,7 @@ def pdf(rows, house, month):
         pending=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='pending'),Decimal('0'))
         paid=sum((Decimal(str(r['amount'])) for r in rows if r.get('payment_status')=='paid'),Decimal('0'))
         card=Table([[p('COMPRAS REGISTRADAS'),p('CONTAS PAGAS'),p('CONTAS A PAGAR')],[p(brl(total-pending-paid),'Heading2'),p(brl(paid),'Heading2'),p(brl(pending),'Heading2')]],colWidths=[173,171,171])
-        card.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#EAF3EE')),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),12),('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10)]));story += [card,Spacer(1,18),p('Onde o dinheiro foi','Heading2')]
+        card.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#EAF3EE')),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),12),('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10)]));story += [card,Spacer(1,10),p(f'Total de compromissos: {brl(total)} | Registros: {len(rows)}'),Spacer(1,12),p('Compromissos por categoria','Heading2')]
         height=len(categories)*29+8; graph=Drawing(515,height); maximum=max(v for _,v in categories)
         for i,(name,value) in enumerate(categories):
             y=height-29*(i+1)
