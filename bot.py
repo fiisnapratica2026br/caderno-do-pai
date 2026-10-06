@@ -165,7 +165,7 @@ def extrair_dados(texto):
                                      'desconto', 'troco', 'quantidade', 'qtde')):
             continue
         prioridade = None
-        if re.search(r'\b(?:valor\s+total|total\s+(?:a\s+pagar|da\s+nota|da\s+compra|geral))\b', rotulo):
+        if re.search(r'\b(?:valor\s+(?:total|a\s+pagar)|total\s+(?:a\s+pagar|da\s+nota|da\s+compra|geral))\b', rotulo):
             prioridade = 3
         elif re.search(r'\btotal\b', rotulo):
             prioridade = 2
