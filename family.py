@@ -17,6 +17,7 @@ from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, f
 TZ = ZoneInfo("America/Sao_Paulo")
 MENU = ReplyKeyboardMarkup([
     ["➕ Adicionar gasto", "📸 Enviar nota"],
+    ["🧾 Adicionar conta a pagar"],
     ["📊 Resumo do mês", "📋 Histórico"],
     ["📥 Exportar planilha", "📄 Relatório PDF"],
     ["📆 Contas a pagar", "🏠 Minha casa"],
@@ -49,6 +50,7 @@ def expense_buttons(identifier, row=None):
          InlineKeyboardButton("Data da compra", callback_data=f"expdate:{identifier}")],
         [InlineKeyboardButton("Descrição", callback_data=f"expdescription:{identifier}"),
          InlineKeyboardButton("Categoria", callback_data=f"expcategory:{identifier}")],
+        [InlineKeyboardButton("Transformar em conta a pagar", callback_data=f"expbill:{identifier}")],
         [InlineKeyboardButton("Concluir edição", callback_data=f"expdone:{identifier}")],
     ])
 
@@ -117,7 +119,8 @@ def buttons(draft_id, data=None):
             [InlineKeyboardButton('Emissão / documento',callback_data='document_date:'+draft_id),InlineKeyboardButton('Categoria',callback_data='category:'+draft_id)],
             [InlineKeyboardButton('Já paguei / data do pagamento',callback_data='payment_date:'+draft_id)],
             [InlineKeyboardButton('Ainda está a pagar',callback_data='unpaid:'+draft_id)],
-            [InlineKeyboardButton('Descrição',callback_data='description:'+draft_id)]])
+            [InlineKeyboardButton('Descrição',callback_data='description:'+draft_id)],
+            [InlineKeyboardButton('É uma compra',callback_data='asreceipt:'+draft_id)]])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Salvar gasto", callback_data="save:"+draft_id),
          InlineKeyboardButton("Cancelar", callback_data="cancel:"+draft_id)],
@@ -125,6 +128,7 @@ def buttons(draft_id, data=None):
          InlineKeyboardButton("Data da compra", callback_data="date:"+draft_id)],
         [InlineKeyboardButton("Editar descrição", callback_data="description:"+draft_id),
          InlineKeyboardButton("Categoria", callback_data="category:"+draft_id)],
+        [InlineKeyboardButton("É uma conta a pagar", callback_data="asbill:"+draft_id)],
     ])
 
 
@@ -176,7 +180,7 @@ async def propose(update, context, data, source_key, details=None):
         return
     data = dict(data)
     if data.get('document_type') == 'bill':
-        data['document_date'] = data.get('date')
+        data['document_date'] = None if source_key.startswith('text:') else data.get('date')
         if data.get('due_date'):
             data['due_date'] = datetime.strptime(data['due_date'], '%d/%m/%Y').date().isoformat()
         data['payment_status'] = 'pending'
@@ -242,11 +246,12 @@ async def handle_text(update, context):
         context.args = []
         await home(update, context)
         return
-    if value in ("➕ Adicionar gasto", "📸 Enviar nota"):
+    if value in ("➕ Adicionar gasto", "📸 Enviar nota", "🧾 Adicionar conta a pagar"):
+        context.user_data["new_bill"] = value == "🧾 Adicionar conta a pagar"
         context.user_data.pop("editing", None)
         await update.message.reply_text(
-            "Escreva a descrição e o valor. Exemplo: cachorro quente do Bidjula 15,00. Depois confira a data e a categoria antes de salvar."
-            if value == "➕ Adicionar gasto" else
+            "Escreva a descrição e o valor. Exemplo: cachorro quente do Bidjula 15,00. Depois escolha compra ou conta a pagar e confira as datas e a categoria antes de salvar."
+            if value in ("➕ Adicionar gasto", "🧾 Adicionar conta a pagar") else
             "Envie uma foto nítida da nota inteira, com boa iluminação. Depois confira os dados antes de salvar.",
             reply_markup=MENU)
         return
@@ -256,7 +261,7 @@ async def handle_text(update, context):
         try:
             if field == "amount":
                 parsed = parse_amount(value)
-            elif field in ("date", "due_date", "document_date", "payment_date"):
+            elif field in ("date", "due_date", "document_date", "payment_date", "convert_due"):
                 parsed_date = datetime.strptime(value, "%d/%m/%Y").date()
                 if field == 'payment_date' and parsed_date > datetime.now(TZ).date():
                     raise ValueError('Pagamento futuro')
@@ -272,7 +277,8 @@ async def handle_text(update, context):
         if draft_id.startswith("expense:"):
             identifier = draft_id.split(":", 1)[1]
             patch = {field: parsed}
-            action = 'update_bill' if field in ('document_date','due_date','payment_date') else 'update_expense'
+            action = 'convert_bill' if field == 'convert_due' else ('update_bill' if field in ('document_date','due_date','payment_date') else 'update_expense')
+            if field == 'convert_due': patch = {'due_date': parsed}
             if field == 'payment_date': patch['payment_status'] = 'paid'
             result = await api(update.effective_user.id, action,
                 {'expense_id': int(identifier), 'patch': patch})
@@ -318,6 +324,7 @@ async def handle_text(update, context):
         await update.message.reply_text("Use uma descrição de até 250 caracteres.")
         return
     await propose(update, context, {"description": description, "amount": parsed,
+        "document_type": "bill" if context.user_data.pop("new_bill", False) else "receipt",
         "date": datetime.now(TZ).date().isoformat(), "category": "Outros", "items": []},
         f"text:{update.effective_chat.id}:{update.message.message_id}")
 
@@ -329,6 +336,25 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action == 'expbill':
+        row = await api(user, 'get_expense', {'expense_id': int(identifier)})
+        if row.get('missing') or row.get('document_type') == 'bill':
+            await q.message.reply_text('Use a edição da conta existente.'); return
+        context.user_data['editing'] = ('convert_due', 'expense:' + identifier)
+        await q.message.reply_text('Qual é o vencimento? Digite DD/MM/AAAA. Ao enviar, este mesmo registro vira conta a pagar, sem duplicar. A antiga data da compra não será tratada como emissão. /cancelar para desistir.'); return
+    if action in ('asbill', 'asreceipt'):
+        draft = await api(user, 'get_draft', {'id': identifier})
+        if draft.get('saved_expense_id') or draft.get('cancelled'):
+            await q.message.reply_text('Esse registro já foi concluído.'); return
+        data = draft['data']
+        patch = {'document_type': 'bill', 'document_date': None, 'due_date': None,
+                 'payment_status': 'pending', 'payment_date': None} if action == 'asbill' else {
+                 'document_type': 'receipt', 'document_date': None, 'due_date': None,
+                 'payment_status': 'recorded', 'payment_date': None}
+        result = await api(user, 'edit', {'id': identifier, 'patch': patch})
+        context.user_data.pop('editing', None)
+        await q.edit_message_text(draft_text(result), reply_markup=buttons(identifier, result))
+        return
     if action in ('billpay','billdue','billdoc','billpending'):
         row = await api(user, 'get_expense', {'expense_id':int(identifier)})
         if row.get('missing') or row.get('document_type') != 'bill':

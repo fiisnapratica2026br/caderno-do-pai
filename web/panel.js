@@ -49,6 +49,7 @@
       info.append(node('p', (bill?(pending?'Vencimento: ':'Pagamento: '):'Compra: ')+dateLabel(effective)+' · #'+row.id));
       info.append(node('span',row.category,'badge'));
       if (bill) {
+        info.append(node('p','Emissão: '+dateLabel(row.document_date)+' · Vencimento: '+dateLabel(row.due_date)));
         const overdue=pending && row.due_date < localToday();
         info.append(node('span',pending?(overdue?'Atrasada':row.due_date===localToday()?'Vence hoje':'A pagar'):'Paga','badge '+(overdue?'overdue':pending?'pending':'')));
       }
