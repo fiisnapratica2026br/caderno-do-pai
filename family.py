@@ -21,6 +21,7 @@ MENU = ReplyKeyboardMarkup([
     ["📊 Resumo do mês", "📋 Histórico"],
     ["📥 Exportar planilha", "📄 Relatório PDF"],
     ["📆 Contas a pagar", "🏠 Minha casa"],
+    ["❓ Como usar"],
 ], resize_keyboard=True)
 
 def expense_text(row):
@@ -202,6 +203,56 @@ async def propose(update, context, data, source_key, details=None):
             await update.effective_message.reply_text(details[offset:offset+3500])
 
 
+HELP_TEXT = """❓ Como usar o controle da casa
+
+🛒 Registrar uma compra
+Toque em “Adicionar gasto” ou escreva: mercado 149,95.
+Também pode enviar uma foto da nota. Confira valor, descrição, categoria e data da compra antes de salvar. A leitura da foto pode errar.
+
+🧾 Registrar uma conta a pagar
+Toque em “Adicionar conta a pagar” e escreva: internet 59,90.
+Informe o vencimento e, se souber, a emissão. Salve como “A pagar”. No rascunho, também pode trocar uma compra para conta usando “É uma conta a pagar”.
+
+📅 Entenda as datas
+Compra: dia em que comprou.
+Emissão: dia em que a conta foi emitida; pode ficar sem informação.
+Vencimento: prazo para pagar.
+Pagamento: dia em que realmente pagou.
+O sistema guarda automaticamente quando você fez o lançamento.
+
+⏰ Conta atrasada
+Uma conta vencida em 02/10 e lançada em 06/10 fica “A pagar” e “Atrasada”. O vencimento continua 02/10. Se pagar em 06/10, informe essa data como pagamento.
+
+✅ Pagar uma conta
+Abra /contas ou /painel, escolha a conta e toque em “Já paguei” ou “Marcar como paga”. Informe o dia real do pagamento. Não use data futura.
+
+✏️ Corrigir um lançamento
+Use /historico para encontrar o número do registro. Exemplo: /editar 123.
+Você pode corrigir valor, descrição, categoria e datas. Se salvou uma conta como compra, toque em “Transformar em conta a pagar” e informe o vencimento. Isso altera o mesmo registro, sem duplicar.
+
+🗑 Excluir
+Exemplo: /excluir 123. Confira e confirme a exclusão. Ela também remove o registro do painel.
+Use /cancelar para sair de uma edição antes de enviar a alteração.
+
+📊 Consultar e exportar
+/painel abre o painel dentro do Telegram.
+/contas mostra pendências, inclusive de outros meses.
+/resumo e /historico consultam o mês atual.
+Para outro mês: /resumo 09/2026.
+/planilha, /csv e /relatorio exportam os registros.
+No resumo, compras entram pela data da compra; contas pagas pelo pagamento; pendentes pelo vencimento.
+
+🏠 Uso da família
+Nesta versão, uma conta do Telegram centraliza os lançamentos da casa. Os registros ficam no banco do serviço, não só no celular.
+Contas mensais precisam ser lançadas a cada mês. Ainda não há repetição automática nem lembretes de vencimento.
+"""
+
+async def help_user(update, context):
+    if not await private(update):
+        return
+    await update.effective_message.reply_text(HELP_TEXT, reply_markup=MENU)
+
+
 async def home(update, context):
     if not await private(update):
         return
@@ -220,6 +271,7 @@ async def home(update, context):
         "/csv — exportação simples\n"
         "/contas — contas a pagar, inclusive atrasadas\n"
         "/painel — abrir o painel visual da casa\n"
+        "/ajuda — guia de uso com exemplos\n"
         "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"
@@ -233,6 +285,9 @@ async def handle_text(update, context):
     if not await private(update):
         return
     value = update.message.text.strip()
+    if value == "❓ Como usar":
+        await help_user(update, context)
+        return
     if value in ("📊 Resumo do mês", "📋 Histórico", "📥 Exportar planilha", "📄 Relatório PDF"):
         context.user_data.pop("editing", None)
         context.args = []
@@ -613,6 +668,7 @@ async def bills(update,context):
 
 def register(app):
     app.add_handler(CommandHandler(["start", "casa", "menu"], home))
+    app.add_handler(CommandHandler(["ajuda", "help"], help_user))
     app.add_handler(CommandHandler("contas", bills))
     app.add_handler(CommandHandler("editar", edit_expense))
     app.add_handler(CommandHandler(["resumo", "historico", "planilha", "relatorio", "csv"], report))
