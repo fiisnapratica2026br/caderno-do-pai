@@ -238,6 +238,19 @@ def extrair_itens(texto):
                     linha = " ".join(fragmentos)
                     break
         if not encontrado:
+            # Tabela com EAN e somente valor do item: preço unitário desconhecido.
+            table_row = re.fullmatch(r'\d{1,4}\s+\d{8,14}\s+(?P<desc>.+?)\s+(?P<subtotal>' + numero + r')\s*', linha)
+            if table_row:
+                descricao = table_row['desc'].strip()
+                quantity = re.search(r'\s+(?P<qtd>\d+(?:[,.]\d{1,3})?)\s*(?P<un>UN|UND|UNID|KG|LT|L|PC|PCT)\s*(?:X|×)?$', descricao, re.I)
+                qtd = Decimal(quantity['qtd'].replace(',', '.')) if quantity else None
+                unidade = quantity['un'].upper() if quantity else ''
+                if quantity:
+                    descricao = descricao[:quantity.start()].strip()
+                else:
+                    descricao = re.sub(r'\s+(?:10N|TUN)\s*(?:X|×)?$', '', descricao, flags=re.I)
+                itens.append({'descricao': descricao, 'quantidade': qtd, 'unidade': unidade,
+                              'unitario': None, 'subtotal': decimal(table_row['subtotal']), 'conferido': False})
             continue
         descricao = linha[:encontrado.start()].strip()
         if not descricao and i:
@@ -264,6 +277,11 @@ def formatar_itens(texto, valor_total):
         return 'R$ ' + format(valor, ',.2f').replace(',', '_').replace('.', ',').replace('_', '.')
     partes = ["\n🛒 Produtos identificados:"]
     for item in itens[:20]:
+        if item['unitario'] is None:
+            quantity = (format(item['quantidade'], 'f').replace('.', ',') + ' ' + item['unidade']
+                        if item['quantidade'] is not None else 'Quantidade não identificada')
+            partes.append(f"• {item['descricao'][:100]}\n  {quantity} | Valor do item: {dinheiro(item['subtotal'])}\n  Preço unitário não identificado; confira.")
+            continue
         qtd = format(item['quantidade'], 'f').rstrip('0').rstrip('.') if '.' in str(item['quantidade']) else str(item['quantidade'])
         partes.append(
             f"• {item['descricao'][:100]}\n"
@@ -276,7 +294,9 @@ def formatar_itens(texto, valor_total):
     partes.append(f"Soma dos itens identificados: {dinheiro(soma)}")
     if valor_total:
         total = Decimal(valor_total.replace('R$ ', '').replace('.', '').replace(',', '.'))
-        if soma == total and all(item['conferido'] for item in itens):
+        if soma == total and any(item['unitario'] is None for item in itens):
+            partes.append("✓ A soma dos valores dos itens bate com o total lido. Quantidades e preços unitários ainda precisam de conferência.")
+        elif soma == total and all(item['conferido'] for item in itens):
             partes.append("✓ A soma dos itens bate com o total lido.")
         else:
             partes.append("⚠️ A soma ou os preços precisam de revisão; pode haver itens ausentes, descontos ou erro de leitura.")
