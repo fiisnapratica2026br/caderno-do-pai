@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import logging
 import family
+import panel_server
 import requests
 from telegram import Update
 from telegram.error import TimedOut
@@ -392,6 +393,7 @@ def main():
            .build())
     
     family.register(app)
+    panel_server.register(app)
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     logging.basicConfig(level=logging.WARNING)
@@ -399,16 +401,7 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     public_url = os.environ.get("RENDER_EXTERNAL_URL")
     if public_url:
-        secret = hashlib.sha256(("webhook:" + TELEGRAM_TOKEN).encode()).hexdigest()
-        print("Bot iniciando com webhook no Render.", flush=True)
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.environ.get("PORT", "10000")),
-            url_path="telegram",
-            webhook_url=public_url.rstrip("/") + "/telegram",
-            secret_token=secret,
-            allowed_updates=["message", "callback_query"],
-        )
+        asyncio.run(panel_server.serve(app, public_url, TELEGRAM_TOKEN))
     else:
         print("Bot iniciando localmente.", flush=True)
         app.run_polling()

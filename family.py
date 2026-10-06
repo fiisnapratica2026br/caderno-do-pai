@@ -215,6 +215,7 @@ async def home(update, context):
         "/relatorio — relatório do mês em PDF\n"
         "/csv — exportação simples\n"
         "/contas — contas a pagar, inclusive atrasadas\n"
+        "/painel — abrir o painel visual da casa\n"
         "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"

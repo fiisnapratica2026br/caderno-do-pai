@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#123b32"><title>Minha casa | Caderno do Pai</title><link rel="stylesheet" href="/panel.css"><script src="https://telegram.org/js/telegram-web-app.js"></script><script defer src="/panel.js"></script></head>
+<body><main>
+<header><div class="brand"><span class="logo">C</span><div><span class="eyebrow">CADERNO DO PAI</span><p>Controle de gastos</p></div></div><button id="refresh" class="quiet" type="button">Atualizar ↻</button></header>
+<section id="welcome" class="welcome" hidden><span class="eyebrow">SUA CASA, EM ORDEM</span><h1>Os gastos da casa.<br>Todos no mesmo lugar.</h1><p>Envie suas notas pelo Telegram e acompanhe aqui o que registrou, o que pagou e o que ainda vence.</p><a class="primary" href="https://t.me/cadernodopai_gastos_bot?start=painel">Abrir o bot no Telegram ↗</a><p class="hint">No bot, envie <strong>/painel</strong> e toque em “Abrir meu painel”.</p></section>
+<div id="dashboard" hidden>
+<section class="intro"><div><span class="eyebrow">SEU CONTROLE FINANCEIRO</span><h1 id="home">Minha casa</h1><p>Acompanhe seus registros, sem perder as contas de vista.</p></div><label class="month-label">Mês de referência<input id="month" type="month" required></label></section>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="content" hidden>
+<section class="stats" aria-label="Resumo do mês"><article class="featured"><span>Compras e contas pagas</span><strong id="paid">—</strong><small>Compras pela data da compra. Contas pelo pagamento.</small></article><article><span>Contas a pagar no mês</span><strong id="pending">—</strong><small>Contas pendentes pelo mês de vencimento.</small></article><article><span>Registros do mês</span><strong id="count">—</strong><small>Compras, contas pagas e contas pendentes.</small></article></section>
+<section class="section"><div class="section-head"><div><h2>Para onde foi o dinheiro</h2><p>Compras e contas pagas, por categoria.</p></div></div><div id="categories" class="categories"></div></section>
+<section class="section"><div class="section-head"><div><h2>Seus registros</h2><p>Os mesmos lançamentos que você confirmou no Telegram.</p></div></div><div class="controls"><div class="tabs" role="group" aria-label="Lista de registros"><button id="tab-month" class="active" type="button">Mês selecionado</button><button id="tab-bills" type="button">Todas a pagar</button></div><label class="search-label"><span class="sr-only">Buscar descrição ou categoria</span><input id="search" type="search" placeholder="Buscar descrição ou categoria"></label></div><div id="rows"></div><p id="limit" class="hint" hidden>Há um limite de 2.000 registros por mês e 100 contas pendentes. Use os relatórios do bot para conferir períodos maiores.</p></section>
+<section class="tip"><span>🧾</span><div><h3>Tem mais uma nota?</h3><p>Volte à conversa e envie a foto ou use “Adicionar gasto”. Confira os dados antes de salvar.</p></div><button id="back" class="quiet" type="button">Voltar ao bot ↗</button></section>
+</div></div>
+<footer>Seus dados ficam na sua casa. A leitura de notas sempre precisa de conferência.</footer>
+</main>
+<dialog id="payment-dialog"><form id="payment-form"><h2>Marcar conta como paga</h2><p id="payment-description"></p><label>Quando você pagou?<input id="payment-date" type="date" required></label><p id="payment-error" role="alert"></p><div class="dialog-actions"><button id="payment-cancel" type="button" class="quiet">Cancelar</button><button id="payment-submit" type="submit" class="primary">Confirmar pagamento</button></div></form></dialog>
+</body></html>
