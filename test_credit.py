@@ -21,3 +21,16 @@ class CreditTests(unittest.TestCase):
   self.assertIn('44,42',text);self.assertIn('44,41',text);self.assertIn('28/10/2026',text)
   self.assertIn('a pagar',text)
  def test_help_fits_telegram(self):self.assertLess(len(family.HELP_TEXT),4096)
+
+from unittest.mock import AsyncMock, patch
+import panel_server
+from telegram.error import RetryAfter
+class StartupRetryTests(unittest.IsolatedAsyncioTestCase):
+ async def test_telegram_wait_is_respected(self):
+  operation=AsyncMock(side_effect=[RetryAfter(5),'ok'])
+  with patch.object(panel_server.asyncio,'sleep',new_callable=AsyncMock) as sleep:
+   self.assertEqual(await panel_server.startup_retry(operation),'ok')
+   sleep.assert_awaited_once_with(6)
+  self.assertEqual(operation.await_count,2)
+ async def test_permanent_error_not_hidden(self):
+  with self.assertRaises(ValueError):await panel_server.startup_retry(AsyncMock(side_effect=ValueError('invalid')))

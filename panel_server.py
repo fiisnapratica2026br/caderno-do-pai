@@ -17,6 +17,7 @@ import tornado.httpserver
 import tornado.web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import CommandHandler
+from telegram.error import RetryAfter, TimedOut, NetworkError
 import family
 
 
@@ -238,6 +239,20 @@ def register(app):
     app.add_handler(CommandHandler("painel", open_panel))
 
 
+async def startup_retry(operation):
+    for attempt in range(3):
+        try:
+            return await operation()
+        except RetryAfter as error:
+            delay=error.retry_after.total_seconds() if hasattr(error.retry_after,'total_seconds') else float(error.retry_after)
+            if attempt==2 or delay>60:raise
+            logging.warning('Telegram pediu pausa na inicialização; aguardando antes de repetir.')
+            await asyncio.sleep(max(1,delay)+1)
+        except (TimedOut, NetworkError):
+            if attempt==2:raise
+            await asyncio.sleep(2*(attempt+1))
+
+
 async def serve(app, public_url, token):
     # Ciclo de vida público do python-telegram-bot, com servidor HTTP próprio.
     stopped = asyncio.Event()
@@ -246,12 +261,13 @@ async def serve(app, public_url, token):
         loop.add_signal_handler(signum, stopped.set)
     secret = hashlib.sha256(("webhook:" + token).encode()).hexdigest()
     server = tornado.httpserver.HTTPServer(create_http_app(app, token), max_buffer_size=1024 * 1024)
+    await startup_retry(app.initialize)
     async with app:
         server.listen(int(os.environ.get("PORT", "10000")), address="0.0.0.0")
         await app.start()
         try:
-            await app.bot.set_webhook(url=public_url.rstrip("/") + "/telegram",
-                secret_token=secret, allowed_updates=["message", "callback_query"])
+            await startup_retry(lambda: app.bot.set_webhook(url=public_url.rstrip("/") + "/telegram",
+                secret_token=secret, allowed_updates=["message", "callback_query"]))
             print("Bot e painel iniciados no Render.", flush=True)
             await stopped.wait()
         finally:
