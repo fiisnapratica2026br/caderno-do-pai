@@ -11,6 +11,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 import requests
 from categorization import suggest_category
+from credit import first_due, installments
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
@@ -21,10 +22,16 @@ MENU = ReplyKeyboardMarkup([
     ["📊 Resumo do mês", "📋 Histórico"],
     ["📥 Exportar planilha", "📄 Relatório PDF"],
     ["📆 Contas a pagar", "🏠 Minha casa"],
-    ["❓ Como usar"],
+    ["💳 Meus cartões", "❓ Como usar"],
 ], resize_keyboard=True)
 
 def expense_text(row):
+    if row.get('credit_group'):
+        return (f"💳 {row['card_name']} · Parcela {row['installment_number']}/{row['installment_count']} · #{row['id']}\n"
+                f"{row['description']}\nParcela: {money(row['amount'])} · Compra total: {money(row['purchase_total'])}\n"
+                f"Compra: {purchase_date(row['expense_date'])}\nVencimento: {purchase_date(row['due_date'])}\n"
+                f"Situação: {'Paga' if row['payment_status']=='paid' else 'A pagar'}\n"
+                f"Pagamento: {purchase_date(row.get('payment_date')) if row.get('payment_date') else 'Não informado'}\n📂 {row['category']}")
     if row.get("document_type") == "bill":
         return (f"🧾 Conta #{row['id']}\n\n🏪 {row['description']}\n💰 {money(row['amount'])}\n"
                 f"📅 Documento: {purchase_date(row.get('document_date')) if row.get('document_date') else 'Não informada'}\n"
@@ -39,6 +46,12 @@ def expense_text(row):
             f"📂 {row['category']}")
 
 def expense_buttons(identifier, row=None):
+    if row and row.get('credit_group'):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('Já paguei esta parcela', callback_data=f'billpay:{identifier}')],
+            [InlineKeyboardButton('Corrigir vencimento desta parcela',callback_data=f'billdue:{identifier}')],
+            [InlineKeyboardButton('Voltar para a pagar',callback_data=f'billpending:{identifier}')],
+            [InlineKeyboardButton('Categoria',callback_data=f'expcategory:{identifier}')]])
     if row and row.get('document_type') == 'bill':
         return InlineKeyboardMarkup([
             [InlineKeyboardButton('Marcar como paga / corrigir pagamento', callback_data=f'billpay:{identifier}')],
@@ -113,6 +126,13 @@ def parse_amount(value):
 
 
 def buttons(draft_id, data=None):
+    if data and data.get('payment_method')=='credit':
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton('Salvar parcelas',callback_data='save:'+draft_id),InlineKeyboardButton('Cancelar',callback_data='cancel:'+draft_id)],
+            [InlineKeyboardButton('Valor total',callback_data='amount:'+draft_id),InlineKeyboardButton('Data da compra',callback_data='date:'+draft_id)],
+            [InlineKeyboardButton('Quantidade de parcelas',callback_data='installments:'+draft_id),InlineKeyboardButton('Primeiro vencimento',callback_data='first_due:'+draft_id)],
+            [InlineKeyboardButton('Escolher cartão',callback_data='credit:'+draft_id),InlineKeyboardButton('Categoria',callback_data='category:'+draft_id)],
+            [InlineKeyboardButton('Não foi no crédito',callback_data='nocredit:'+draft_id)]])
     if data and data.get('document_type') == 'bill':
         return InlineKeyboardMarkup([
             [InlineKeyboardButton('Salvar conta',callback_data='save:'+draft_id),InlineKeyboardButton('Cancelar',callback_data='cancel:'+draft_id)],
@@ -130,6 +150,7 @@ def buttons(draft_id, data=None):
         [InlineKeyboardButton("Editar descrição", callback_data="description:"+draft_id),
          InlineKeyboardButton("Categoria", callback_data="category:"+draft_id)],
         [InlineKeyboardButton("É uma conta a pagar", callback_data="asbill:"+draft_id)],
+        [InlineKeyboardButton("💳 Compra no cartão de crédito",callback_data="credit:"+draft_id)],
     ])
 
 
@@ -141,6 +162,15 @@ async def private(update):
 
 
 def draft_text(data):
+    if data.get('payment_method')=='credit':
+        count=data.get('installments',1)
+        values=installments(data['amount'],count) if data.get('amount') else []
+        schedule=(f"{count}x · primeira {money(values[0])}"+(f" · última {money(values[-1])}" if values and values[-1]!=values[0] else '')) if values else 'Corrija o valor total'
+        return (f"💳 Confira a compra no crédito\n\n{data.get('description')}\n"
+                f"Total da compra: {money(data['amount']) if data.get('amount') else 'Não informado'}\n"
+                f"Cartão: {data.get('card_name')}\nCompra: {purchase_date(data.get('date'))}\n"
+                f"{schedule}\nPrimeiro vencimento: {purchase_date(data.get('first_due'))}\n"
+                f"📂 {data.get('category','Outros')}\n\nTodas as parcelas começam a pagar. Confira a primeira fatura: compras no dia do fechamento podem entrar no próximo mês. Valor total deve incluir eventuais juros. A compra não será somada novamente às parcelas.")
     if data.get('document_type') == 'bill':
         return ("🧾 Confira a conta antes de salvar\n\n"
             f"🏪 {data.get('description')}\n💰 {money(data['amount']) if data.get('amount') else 'Corrija o valor'}\n"
@@ -244,6 +274,10 @@ No resumo, compras entram pela data da compra; contas pagas pelo pagamento; pend
 
 🏠 Uso da família
 Nesta versão, uma conta do Telegram centraliza os lançamentos da casa. Os registros ficam no banco do serviço, não só no celular.
+💳 Cartão de crédito
+Cadastre: /cartao Meu cartão | 22 | 28 (fechamento e vencimento).
+No rascunho da compra, toque em “Compra no cartão de crédito”, escolha o cartão e informe as parcelas (1 para crédito à vista). Confira o primeiro vencimento na sua fatura. Compras no dia do fechamento são sugeridas para o próximo ciclo.
+As parcelas entram como contas a pagar. No painel, “Paguei esta fatura” quita apenas as parcelas cadastradas daquele cartão e vencimento. O app não consulta o banco. Não lance a mesma fatura novamente como outro gasto.
 Contas mensais precisam ser lançadas a cada mês. Ainda não há repetição automática nem lembretes de vencimento.
 """
 
@@ -251,6 +285,24 @@ async def help_user(update, context):
     if not await private(update):
         return
     await update.effective_message.reply_text(HELP_TEXT, reply_markup=MENU)
+
+
+async def cards_user(update, context):
+    if not await private(update):return
+    context.user_data.pop('editing',None)
+    cards=await api(update.effective_user.id,'cards')
+    args=' '.join(context.args or [])
+    if args:
+        try:
+            name,closing,due=[x.strip() for x in args.split('|')]
+            closing,due=int(closing),int(due)
+            if not name or len(name)>40 or not 1<=closing<=31 or not 1<=due<=31:raise ValueError()
+        except ValueError:
+            await update.effective_message.reply_text('Use /cartao Nome | fechamento | vencimento\nExemplo: /cartao Meu cartão | 22 | 28\nNão envie número, senha ou código do cartão.');return
+        await api(update.effective_user.id,'set_card',{'name':name,'closing_day':closing,'due_day':due})
+        cards=await api(update.effective_user.id,'cards')
+    lines=[f"💳 {c['name']} · fecha dia {c['closing_day']} · vence dia {c['due_day']}" for c in cards]
+    await update.effective_message.reply_text(('\n'.join(lines) if lines else 'Nenhum cartão cadastrado.')+'\n\nCadastre ou atualize: /cartao Meu cartão | 22 | 28\nUse apenas um apelido; não envie dados do cartão. Alterar o cadastro não muda parcelas já salvas.',reply_markup=MENU)
 
 
 async def home(update, context):
@@ -272,6 +324,7 @@ async def home(update, context):
         "/contas — contas a pagar, inclusive atrasadas\n"
         "/painel — abrir o painel visual da casa\n"
         "/ajuda — guia de uso com exemplos\n"
+        "/cartao — cadastrar fechamento e vencimento\n"
         "/editar 123 — corrigir um gasto salvo\n"
         "/excluir 123 — excluir um gasto pelo número\n"
         "Para outro mês: /resumo 09/2026 ou /planilha 09/2026.\n\n"
@@ -285,6 +338,10 @@ async def handle_text(update, context):
     if not await private(update):
         return
     value = update.message.text.strip()
+    if value == "💳 Meus cartões":
+        context.args=[]
+        await cards_user(update,context)
+        return
     if value == "❓ Como usar":
         await help_user(update, context)
         return
@@ -314,9 +371,12 @@ async def handle_text(update, context):
     if edit:
         field, draft_id = edit
         try:
-            if field == "amount":
+            if field == "installments":
+                parsed=int(value)
+                if not 1<=parsed<=36:raise ValueError()
+            elif field == "amount":
                 parsed = parse_amount(value)
-            elif field in ("date", "due_date", "document_date", "payment_date", "convert_due"):
+            elif field in ("date", "due_date", "document_date", "payment_date", "convert_due", "first_due"):
                 parsed_date = datetime.strptime(value, "%d/%m/%Y").date()
                 if field == 'payment_date' and parsed_date > datetime.now(TZ).date():
                     raise ValueError('Pagamento futuro')
@@ -345,6 +405,21 @@ async def handle_text(update, context):
                     reply_markup=expense_buttons(identifier, result))
             return
         patch = {field: parsed}
+        if field in ('date','first_due','installments','amount'):
+            current=await api(update.effective_user.id,'get_draft',{'id':draft_id})
+            current=current.get('data',{})
+            if current.get('payment_method')=='credit':
+                count=parsed if field=='installments' else current.get('installments',1)
+                amount=parsed if field=='amount' else current.get('amount')
+                try:
+                    if amount:installments(amount,count)
+                    if field=='first_due' and parsed<current.get('date',''):raise ValueError()
+                except ValueError:
+                    await update.message.reply_text('Confira valor, quantidade de parcelas e vencimento após a compra.');return
+                if field=='date':
+                    cards=await api(update.effective_user.id,'cards')
+                    card=next((c for c in cards if c['name']==current.get('card_name')),None)
+                    if card:patch['first_due']=first_due(date.fromisoformat(parsed),card['closing_day'],card['due_day']).isoformat()
         if field == 'payment_date': patch['payment_status'] = 'paid'
         if field == "description":
             draft = await api(update.effective_user.id, "get_draft", {"id": draft_id})
@@ -391,6 +466,37 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action == 'credit':
+        draft=await api(user,'get_draft',{'id':identifier})
+        if draft.get('saved_expense_id') or draft.get('cancelled'):
+            await q.message.reply_text('Esse registro já foi concluído.');return
+        if draft['data'].get('document_type')=='bill':
+            await q.message.reply_text('Use crédito para uma compra. Uma fatura de cartão não deve ser cadastrada junto com as compras que ela já contém.');return
+        cards=await api(user,'cards')
+        if not cards:
+            await q.message.reply_text('Cadastre primeiro: /cartao Meu cartão | 22 | 28\nDepois toque novamente em Compra no cartão de crédito. Não envie dados do cartão.');return
+        await q.message.reply_text('Qual cartão?',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(c['name'],callback_data=f'pickcard:{identifier}:{i}')] for i,c in enumerate(cards)]));return
+    if action == 'pickcard':
+        identifier,index=identifier.rsplit(':',1)
+        draft=await api(user,'get_draft',{'id':identifier})
+        if draft.get('saved_expense_id') or draft.get('cancelled'):
+            await q.message.reply_text('Esse registro já foi concluído.');return
+        cards=await api(user,'cards')
+        if not index.isdigit() or int(index)>=len(cards):return
+        card=cards[int(index)];data=draft['data']
+        if not data.get('date'):
+            await q.message.reply_text('Informe primeiro a data da compra no rascunho.');return
+        result=await api(user,'edit',{'id':identifier,'patch':{'payment_method':'credit','card_name':card['name'],'installments':1,
+            'first_due':first_due(date.fromisoformat(data['date']),card['closing_day'],card['due_day']).isoformat()}})
+        context.user_data['editing']=('installments',identifier)
+        await q.message.reply_text(draft_text(result),reply_markup=buttons(identifier,result))
+        await q.message.reply_text('Em quantas parcelas? Envie um número de 1 a 36. Use 1 para crédito à vista.');return
+    if action == 'nocredit':
+        result=await api(user,'edit',{'id':identifier,'patch':{'payment_method':None,'card_name':None,'installments':None,'first_due':None}})
+        context.user_data.pop('editing',None)
+        if 'saved' in result:await q.message.reply_text('Esse registro já foi salvo.')
+        else:await q.edit_message_text(draft_text(result),reply_markup=buttons(identifier,result))
+        return
     if action == 'expbill':
         row = await api(user, 'get_expense', {'expense_id': int(identifier)})
         if row.get('missing') or row.get('document_type') == 'bill':
@@ -402,9 +508,9 @@ async def callback(update, context):
         if draft.get('saved_expense_id') or draft.get('cancelled'):
             await q.message.reply_text('Esse registro já foi concluído.'); return
         data = draft['data']
-        patch = {'document_type': 'bill', 'document_date': None, 'due_date': None,
+        patch = {'payment_method': None, 'document_type': 'bill', 'document_date': None, 'due_date': None,
                  'payment_status': 'pending', 'payment_date': None} if action == 'asbill' else {
-                 'document_type': 'receipt', 'document_date': None, 'due_date': None,
+                 'payment_method': None, 'document_type': 'receipt', 'document_date': None, 'due_date': None,
                  'payment_status': 'recorded', 'payment_date': None}
         result = await api(user, 'edit', {'id': identifier, 'patch': patch})
         context.user_data.pop('editing', None)
@@ -501,6 +607,12 @@ async def callback(update, context):
         if action != 'cancel':
             draft = await api(user,'get_draft',{'id':identifier})
             data = draft.get('data',{})
+            if data.get('payment_method')=='credit' and not draft.get('saved_expense_id'):
+                try:
+                    installments(data['amount'],data.get('installments',1))
+                    if not data.get('date') or not data.get('first_due') or data['first_due']<data['date']:raise ValueError()
+                except (ValueError,KeyError,TypeError):
+                    await q.message.reply_text('Confira o valor total, a data da compra, as parcelas e o primeiro vencimento antes de salvar.');return
             if data.get('document_type') == 'bill' and not draft.get('saved_expense_id'):
                 if not data.get('amount') or not data.get('due_date'):
                     await q.message.reply_text('Informe o valor e o vencimento antes de salvar a conta.');return
@@ -516,7 +628,7 @@ async def callback(update, context):
             return
         context.user_data.pop("editing", None)
         await q.edit_message_text(
-            f"✅ Registro #{result['saved']} salvo para a casa.\nUse o menu para consultar os gastos e contas."
+            f"✅ Registro #{result['saved']} salvo para a casa." + (f"\n{result['installments']} parcela(s) criada(s) a pagar. Confira /contas ou /painel." if result.get("installments") else "\nUse o menu para consultar os gastos e contas.")
             if result.get("saved") else "Registro cancelado.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Editar gasto",
                 callback_data=f"expense:{result['saved']}")]]) if result.get("saved") else None)
@@ -526,7 +638,7 @@ async def callback(update, context):
         if 'saved' in result: await q.message.reply_text('Esse registro já foi salvo.')
         else: await q.edit_message_text(draft_text(result),reply_markup=buttons(identifier,result))
         return
-    if action not in ("amount", "date", "description", "category", "due_date", "document_date", "payment_date"):
+    if action not in ("amount", "date", "description", "category", "due_date", "document_date", "payment_date", "installments", "first_due"):
         return
     draft = await api(user, "get_draft", {"id": identifier})
     if draft.get("saved_expense_id") or draft.get("cancelled"):
@@ -537,7 +649,7 @@ async def callback(update, context):
         await q.message.reply_text("Escolha a categoria deste gasto:", reply_markup=category_buttons(identifier))
         return
     context.user_data["editing"] = (action, identifier)
-    prompts = {'due_date':'Digite o vencimento: DD/MM/AAAA.', 'document_date':'Digite a emissão / data do documento: DD/MM/AAAA.', 'payment_date':'Digite o dia em que pagou: DD/MM/AAAA. Não use uma data futura.', "amount": "Digite o valor correto. Exemplo: 149,95",
+    prompts = {'installments':'Em quantas parcelas? Envie de 1 a 36. Crédito à vista = 1.', 'first_due':'Digite o primeiro vencimento em DD/MM/AAAA. Confira na fatura do cartão.', 'due_date':'Digite o vencimento: DD/MM/AAAA.', 'document_date':'Digite a emissão / data do documento: DD/MM/AAAA.', 'payment_date':'Digite o dia em que pagou: DD/MM/AAAA. Não use uma data futura.', "amount": "Digite o valor correto. Exemplo: 149,95",
         "date": "Digite a data real da compra com ano. Exemplo: 03/05/2026. A data do lançamento será automática.",
         "description": "Digite o nome da loja ou a descrição do gasto.",
         "category": "Digite a categoria: Mercado, Casa, Transporte, Saúde, Educação, Lazer ou Outros."}
@@ -668,6 +780,7 @@ async def bills(update,context):
 
 def register(app):
     app.add_handler(CommandHandler(["start", "casa", "menu"], home))
+    app.add_handler(CommandHandler("cartao", cards_user))
     app.add_handler(CommandHandler(["ajuda", "help"], help_user))
     app.add_handler(CommandHandler("contas", bills))
     app.add_handler(CommandHandler("editar", edit_expense))

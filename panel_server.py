@@ -88,7 +88,7 @@ class BaseHandler(tornado.web.RequestHandler):
 
 class HealthHandler(BaseHandler):
     def get(self):
-        self.finish({"status": "ok", "panel": "telegram-v1"})
+        self.finish({"status": "ok", "panel": "telegram-credit-v2"})
 
 
 class PanelHandler(BaseHandler):
@@ -166,7 +166,8 @@ class ApiHandler(BaseHandler):
                     self.backend(user, "bills"))
                 # Não enviar metadados internos de notas/rascunhos ao navegador.
                 fields = {"id", "amount", "description", "category", "expense_date",
-                          "document_type", "document_date", "due_date", "payment_date", "payment_status"}
+                          "document_type", "document_date", "due_date", "payment_date", "payment_status",
+                          "credit_group", "card_name", "installment_number", "installment_count", "purchase_total"}
                 clean = lambda records: [{key: value for key, value in row.items() if key in fields} for row in records]
                 self.finish({"home": home.get("name", "Minha casa"), "month": payload["month"],
                     "rows": clean(rows), "bills": clean(bills), "summary": summary(rows),
@@ -178,13 +179,20 @@ class ApiHandler(BaseHandler):
                     self.finish({"error": "Registro não encontrado nesta casa."})
                 else:
                     self.finish({"ok": True})
-            elif action == "pay":
+            elif action in ("pay", "pay_invoice"):
                 value = payload.get("date")
                 if not isinstance(value, str):
                     raise ValueError("Informe a data do pagamento.")
                 payment = date.fromisoformat(value)
                 if payment > datetime.now(family.TZ).date():
                     raise ValueError("O pagamento não pode estar no futuro.")
+                if action=='pay_invoice':
+                    due=date.fromisoformat(payload.get('due_date','')).isoformat()
+                    card=payload.get('card_name')
+                    if not isinstance(card,str) or not 1<=len(card)<=40:raise ValueError()
+                    result=await self.backend(user,'pay_invoice',{'card_name':card,'due_date':due,'payment_date':payment.isoformat()})
+                    self.finish({'ok':True,'paid':result.get('paid',0)})
+                    return
                 result = await self.backend(user, "update_bill", {"expense_id": expense_id(payload.get("id")),
                     "patch": {"payment_status": "paid", "payment_date": payment.isoformat()}})
                 if result.get("missing"):

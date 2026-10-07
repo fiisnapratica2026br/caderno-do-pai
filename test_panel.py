@@ -60,6 +60,7 @@ class HttpTests(AsyncHTTPTestCase):
             if action in ("list","bills"):return []
             if action=="delete":return {"deleted":None}
             if action=="update_bill":return {"missing":True}
+            if action=="pay_invoice":return {"paid":1}
         return panel.create_http_app(self.telegram,TOKEN,backend)
     def request(self,payload,headers=None):
         return self.fetch('/api/panel',method="POST",body=json.dumps(payload),headers=headers or {'Content-Type':'application/json'})
@@ -80,6 +81,14 @@ class HttpTests(AsyncHTTPTestCase):
         self.assertEqual(self.calls,[])
     def test_future_payment_not_forwarded(self):
         self.assertEqual(self.request({"initData":signed(),"action":"pay","id":123,"date":"2999-01-01"}).code,400)
+        self.assertEqual(self.calls,[])
+    def test_invoice_payment_uses_signed_user(self):
+        response=self.request({'initData':signed(42),'action':'pay_invoice','card_name':'Meu cartão','due_date':'2026-10-28','date':'2026-10-06','user_id':99})
+        self.assertEqual(response.code,200)
+        self.assertEqual(self.calls,[(42,'pay_invoice',{'card_name':'Meu cartão','due_date':'2026-10-28','payment_date':'2026-10-06'})])
+    def test_future_invoice_payment_blocked(self):
+        response=self.request({'initData':signed(),'action':'pay_invoice','card_name':'Meu cartão','due_date':'2999-01-28','date':'2999-01-28'})
+        self.assertEqual(response.code,400)
         self.assertEqual(self.calls,[])
     def test_untrusted_origin_rejected(self):
         self.assertEqual(self.request({"initData":signed(),"month":"2026-10"}, {'Origin':'https://evil.example'}).code,403)
