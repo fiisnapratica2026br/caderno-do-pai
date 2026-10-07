@@ -34,3 +34,49 @@ class StartupRetryTests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual(operation.await_count,2)
  async def test_permanent_error_not_hidden(self):
   with self.assertRaises(ValueError):await panel_server.startup_retry(AsyncMock(side_effect=ValueError('invalid')))
+
+from types import SimpleNamespace as NS
+class InstallmentConversationTests(unittest.IsolatedAsyncioTestCase):
+ def setUp(self):
+  self.data={'description':'Drogal','amount':'133.25','date':'2026-10-06','document_type':'receipt','category':'Saúde'}
+  self.cards=[{'name':'Meu cartão inter','closing_day':22,'due_day':28}]
+  self.calls=[]
+  self.context=NS(user_data={})
+ async def backend(self,user,action,data=None):
+  self.calls.append((user,action,data))
+  if action=='get_draft':return {'data':dict(self.data)}
+  if action=='cards':return self.cards
+  if action=='edit':
+   self.data.update(data['patch']);return dict(self.data)
+  raise AssertionError('Unexpected action: '+action)
+ def callback_update(self,value):
+  message=NS(reply_text=AsyncMock())
+  return NS(callback_query=NS(data=value,answer=AsyncMock(),message=message,edit_message_text=AsyncMock()),effective_chat=NS(type='private'),effective_user=NS(id=42))
+ def text_update(self,value):
+  message=NS(text=value,reply_text=AsyncMock())
+  return NS(message=message,effective_chat=NS(type='private'),effective_user=NS(id=42))
+ async def test_screenshot_sequence_preserves_original_purchase(self):
+  with patch.object(family,'api',self.backend):
+   await family.callback(self.callback_update('credit:draft'),self.context)
+   await family.handle_text(self.text_update('3 parcelas'),self.context)
+   self.assertFalse(any(a=='draft' for _,a,_ in self.calls))
+   await family.callback(self.callback_update('pickcard:draft:0'),self.context)
+  self.assertEqual(self.data['amount'],'133.25')
+  self.assertEqual(self.data['description'],'Drogal')
+  self.assertEqual(self.data['installments'],3)
+  self.assertEqual(self.data['first_due'],'2026-10-28')
+ async def test_quantity_text_after_card_is_accepted(self):
+  self.data.update(payment_method='credit',card_name='Meu cartão inter',installments=1,first_due='2026-10-28')
+  self.context.user_data['editing']=('installments','draft')
+  with patch.object(family,'api',self.backend):await family.handle_text(self.text_update('3 parcelas'),self.context)
+  self.assertEqual(self.data['amount'],'133.25');self.assertEqual(self.data['installments'],3)
+ async def test_quantity_without_context_never_creates_purchase(self):
+  backend=AsyncMock()
+  with patch.object(family,'api',backend):await family.handle_text(self.text_update('3 parcelas'),self.context)
+  backend.assert_not_awaited()
+ async def test_inline_quantity_updates_same_draft(self):
+  self.data.update(payment_method='credit',card_name='Meu cartão inter',installments=1,first_due='2026-10-28')
+  with patch.object(family,'api',self.backend):await family.callback(self.callback_update('creditqty:draft:3'),self.context)
+  self.assertEqual(self.data['amount'],'133.25');self.assertEqual(self.data['installments'],3)
+  edits=[d for _,a,d in self.calls if a=='edit']
+  self.assertEqual(edits,[{'id':'draft','patch':{'installments':3}}])

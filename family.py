@@ -125,6 +125,17 @@ def parse_amount(value):
     return format(amount.quantize(Decimal("0.01")), "f")
 
 
+def installment_buttons(draft_id):
+    choices=[InlineKeyboardButton(f'{n}x' + (' (à vista)' if n==1 else ''),callback_data=f'creditqty:{draft_id}:{n}') for n in (1,2,3,4,5,6,10,12)]
+    return InlineKeyboardMarkup([choices[i:i+3] for i in range(0,len(choices),3)]+[[InlineKeyboardButton('Outra quantidade',callback_data='installments:'+draft_id)]])
+
+
+def parse_installment_count(value):
+    match=re.fullmatch(r'\s*(\d{1,2})\s*(?:x|parcelas?)?\s*',value,re.I)
+    if not match or not 1<=int(match[1])<=36:raise ValueError('Parcelas inválidas')
+    return int(match[1])
+
+
 def buttons(draft_id, data=None):
     if data and data.get('payment_method')=='credit':
         return InlineKeyboardMarkup([
@@ -209,6 +220,7 @@ def duplicate_text(rows):
 async def propose(update, context, data, source_key, details=None):
     if not await private(update):
         return
+    context.user_data.pop('waiting_credit',None)
     data = dict(data)
     if data.get('document_type') == 'bill':
         data['document_date'] = None if source_key.startswith('text:') else data.get('date')
@@ -306,6 +318,8 @@ async def cards_user(update, context):
 
 
 async def home(update, context):
+    context.user_data.pop('waiting_credit',None)
+    context.user_data.pop('editing',None)
     if not await private(update):
         return
     name = " ".join(context.args).strip()
@@ -359,6 +373,7 @@ async def handle_text(update, context):
         await home(update, context)
         return
     if value in ("➕ Adicionar gasto", "📸 Enviar nota", "🧾 Adicionar conta a pagar"):
+        context.user_data.pop("waiting_credit",None)
         context.user_data["new_bill"] = value == "🧾 Adicionar conta a pagar"
         context.user_data.pop("editing", None)
         await update.message.reply_text(
@@ -367,13 +382,24 @@ async def handle_text(update, context):
             "Envie uma foto nítida da nota inteira, com boa iluminação. Depois confira os dados antes de salvar.",
             reply_markup=MENU)
         return
+    quantity_text=re.fullmatch(r'\s*\d{1,2}\s*(?:x|parcelas?)\s*',value,re.I)
+    waiting=context.user_data.get('waiting_credit')
+    if waiting and re.fullmatch(r'\s*\d{1,2}\s*(?:x|parcelas?)?\s*',value,re.I):
+        try:waiting['count']=parse_installment_count(value)
+        except ValueError:
+            await update.message.reply_text('Escolha de 1 a 36 parcelas.');return
+        cards=await api(update.effective_user.id,'cards')
+        await update.message.reply_text(f"Entendi: {waiting['count']} parcelas. Toque no nome do cartão abaixo para aplicar à compra original; nenhum gasto novo foi criado.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(c['name'],callback_data=f"pickcard:{waiting['id']}:{i}")] for i,c in enumerate(cards)]))
+        return
     edit = context.user_data.get("editing")
+    if quantity_text and (not edit or edit[0]!='installments'):
+        await update.message.reply_text('Essa mensagem indica parcelas, não um gasto novo. Volte à nota original, toque em Compra no cartão de crédito e depois no nome do cartão.');return
     if edit:
         field, draft_id = edit
         try:
             if field == "installments":
-                parsed=int(value)
-                if not 1<=parsed<=36:raise ValueError()
+                parsed=parse_installment_count(value)
             elif field == "amount":
                 parsed = parse_amount(value)
             elif field in ("date", "due_date", "document_date", "payment_date", "convert_due", "first_due"):
@@ -466,6 +492,26 @@ async def callback(update, context):
         return
     action, identifier = q.data.split(":", 1)
     user = update.effective_user.id
+    if action == 'creditqty':
+        identifier,value=identifier.rsplit(':',1)
+        try:count=parse_installment_count(value)
+        except ValueError:return
+        draft=await api(user,'get_draft',{'id':identifier})
+        if draft.get('saved_expense_id') or draft.get('cancelled'):
+            await q.message.reply_text('Esse registro já foi concluído.');return
+        data=draft['data']
+        if data.get('payment_method')!='credit':
+            await q.message.reply_text('Escolha primeiro o cartão desta compra.');return
+        try:
+            if data.get('amount'):installments(data['amount'],count)
+        except ValueError:
+            await q.message.reply_text('O valor total é pequeno para essa quantidade de parcelas.');return
+        result=await api(user,'edit',{'id':identifier,'patch':{'installments':count}})
+        context.user_data.pop('editing',None)
+        context.user_data.pop('waiting_credit',None)
+        if 'saved' in result:await q.message.reply_text('Esse registro já foi salvo.')
+        else:await q.edit_message_text(draft_text(result),reply_markup=buttons(identifier,result))
+        return
     if action == 'credit':
         draft=await api(user,'get_draft',{'id':identifier})
         if draft.get('saved_expense_id') or draft.get('cancelled'):
@@ -475,7 +521,9 @@ async def callback(update, context):
         cards=await api(user,'cards')
         if not cards:
             await q.message.reply_text('Cadastre primeiro: /cartao Meu cartão | 22 | 28\nDepois toque novamente em Compra no cartão de crédito. Não envie dados do cartão.');return
-        await q.message.reply_text('Qual cartão?',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(c['name'],callback_data=f'pickcard:{identifier}:{i}')] for i,c in enumerate(cards)]));return
+        context.user_data.pop('editing',None)
+        context.user_data['waiting_credit']={'id':identifier}
+        await q.message.reply_text('Toque no nome do cartão abaixo. Depois escolha as parcelas:',reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(c['name'],callback_data=f'pickcard:{identifier}:{i}')] for i,c in enumerate(cards)]));return
     if action == 'pickcard':
         identifier,index=identifier.rsplit(':',1)
         draft=await api(user,'get_draft',{'id':identifier})
@@ -486,12 +534,19 @@ async def callback(update, context):
         card=cards[int(index)];data=draft['data']
         if not data.get('date'):
             await q.message.reply_text('Informe primeiro a data da compra no rascunho.');return
-        result=await api(user,'edit',{'id':identifier,'patch':{'payment_method':'credit','card_name':card['name'],'installments':1,
+        waiting=context.user_data.pop('waiting_credit',{})
+        count=waiting.get('count',1) if waiting.get('id')==identifier else 1
+        try:
+            if data.get('amount'):installments(data['amount'],count)
+        except ValueError:
+            await q.message.reply_text('Confira o valor total e a quantidade de parcelas.');return
+        result=await api(user,'edit',{'id':identifier,'patch':{'payment_method':'credit','card_name':card['name'],'installments':count,
             'first_due':first_due(date.fromisoformat(data['date']),card['closing_day'],card['due_day']).isoformat()}})
         context.user_data['editing']=('installments',identifier)
         await q.message.reply_text(draft_text(result),reply_markup=buttons(identifier,result))
-        await q.message.reply_text('Em quantas parcelas? Envie um número de 1 a 36. Use 1 para crédito à vista.');return
+        await q.message.reply_text('Em quantas parcelas? Toque em uma opção abaixo ou escreva, por exemplo, 3 parcelas. Depois confira e toque em Salvar parcelas.',reply_markup=installment_buttons(identifier));return
     if action == 'nocredit':
+        context.user_data.pop('waiting_credit',None)
         result=await api(user,'edit',{'id':identifier,'patch':{'payment_method':None,'card_name':None,'installments':None,'first_due':None}})
         context.user_data.pop('editing',None)
         if 'saved' in result:await q.message.reply_text('Esse registro já foi salvo.')
@@ -607,6 +662,8 @@ async def callback(update, context):
         if action != 'cancel':
             draft = await api(user,'get_draft',{'id':identifier})
             data = draft.get('data',{})
+            if context.user_data.get('waiting_credit',{}).get('id')==identifier:
+                await q.message.reply_text('Toque no nome do cartão para concluir a escolha antes de salvar esta compra.');return
             if data.get('payment_method')=='credit' and not draft.get('saved_expense_id'):
                 try:
                     installments(data['amount'],data.get('installments',1))
@@ -649,6 +706,8 @@ async def callback(update, context):
         await q.message.reply_text("Escolha a categoria deste gasto:", reply_markup=category_buttons(identifier))
         return
     context.user_data["editing"] = (action, identifier)
+    if action=='installments':
+        await q.message.reply_text('Escolha as parcelas abaixo ou escreva 3 parcelas, por exemplo.',reply_markup=installment_buttons(identifier));return
     prompts = {'installments':'Em quantas parcelas? Envie de 1 a 36. Crédito à vista = 1.', 'first_due':'Digite o primeiro vencimento em DD/MM/AAAA. Confira na fatura do cartão.', 'due_date':'Digite o vencimento: DD/MM/AAAA.', 'document_date':'Digite a emissão / data do documento: DD/MM/AAAA.', 'payment_date':'Digite o dia em que pagou: DD/MM/AAAA. Não use uma data futura.', "amount": "Digite o valor correto. Exemplo: 149,95",
         "date": "Digite a data real da compra com ano. Exemplo: 03/05/2026. A data do lançamento será automática.",
         "description": "Digite o nome da loja ou a descrição do gasto.",
@@ -751,6 +810,7 @@ async def delete(update, context):
 
 
 async def cancel_edit(update, context):
+    context.user_data.pop('waiting_credit',None)
     context.user_data.pop("editing", None)
     await update.message.reply_text("Edição cancelada. Você pode voltar aos botões da nota.")
 

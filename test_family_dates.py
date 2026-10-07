@@ -8,7 +8,7 @@ class DateFlowTests(unittest.IsolatedAsyncioTestCase):
         update=NS(effective_chat=NS(type='private'),effective_user=NS(id=42),effective_message=NS(reply_text=AsyncMock()))
         backend=AsyncMock(side_effect=[{},{}])
         with patch.object(family,'api',backend):
-            await family.propose(update,NS(),{'document_type':'bill','date':'2026-10-06','description':'internet','amount':'59.90','category':'Internet e telefone'},'text:42:1')
+            await family.propose(update,NS(user_data={}),{'document_type':'bill','date':'2026-10-06','description':'internet','amount':'59.90','category':'Internet e telefone'},'text:42:1')
         data=backend.call_args_list[0].args[2]['data']
         self.assertIsNone(data['document_date'])
         self.assertEqual(data['payment_status'],'pending')
