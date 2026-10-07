@@ -19,7 +19,7 @@ RULES = {
     "Compras na internet": (r"shopee|amazon|mercado livre|mercadolivre|tiktok|tik tok|aliexpress|shein|compra online|compras online",),
     "Moradia": (r"aluguel|condominio|financiamento imobiliario|prestacao da casa|prestacao do apartamento",),
     "Internet e telefone": (r"internet|banda larga|fibra optica|conta de telefone|plano de celular|recarga de celular|telefonia|telecom|intercel",),
-    "Saúde": (r"farmacia|drogaria|medicamento|remedio|consulta medica|dentista|odontologia|hospital|plano de saude|exame medico|clinica|fisioterapia",),
+    "Saúde": (r"farmacia|drogaria|drogal|medicamento|remedio|consulta medica|dentista|odontologia|hospital|plano de saude|exame medico|clinica|fisioterapia",),
     "Educação": (r"escola|escolar|mensalidade escolar|faculdade|universidade|curso|material escolar|livro didatico|creche|apostila",),
     "Transporte": (r"combustivel|gasolina|etanol|diesel|abastecimento|abasteci|posto de combustivel|posto de gasolina|gnv|uber|99pop|taxi|onibus|metro|passagem|pedagio|estacionamento|oficina mecanica|mecanico|pneu|pneus|troca de oleo|seguro do carro",),
     "Casa e manutenção": (r"mesa|cadeira|cadeiras|sofa|armario|cama|colchao|geladeira|fogao|lavadora|micro ondas|moveis|mobilia|abracadeira|abracadeiras|material de construcao|ferragem|ferragens|tinta|cimento|torneira|encanador|eletricista|botijao|gas de cozinha|conserto|reforma",),
@@ -44,7 +44,7 @@ def classify_text(value, merchant=False):
     if merchant:
         if matches(text, RULES["Supermercado"][0]):
             return "Supermercado"
-        if matches(text, r"farmacia|drogaria"):
+        if matches(text, r"farmacia|drogaria|drogal"):
             return "Saúde"
         if matches(text, r"pet shop|petshop|veterinario|veterinaria"):
             return "Pets"
@@ -92,3 +92,4 @@ def suggest_category(description, items=None, amount=None):
     if len(count) == 1 and not amount:
         return next(iter(count))
     return "Outros"
+
